@@ -3,6 +3,11 @@ import {
   AlertCircle,
   Archive,
   ArrowLeft,
+  Settings as SettingsIcon,
+  AlertTriangle,
+  Cpu,
+  Pause,
+  Play,
   ArrowRight,
   Check,
   CheckCircle2,
@@ -38,6 +43,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import type {
   Account,
+  AccountStatus,
+  BulkAccountAction,
+  Campaign,
   CampaignSummary,
   Event,
   Group,
@@ -47,14 +55,37 @@ import type {
   Page,
 } from "../shared/contracts";
 import Modal from "./components/Modal";
+import BulkActionModal, { type BulkKind } from "./components/BulkActionModal";
+import ConfirmDialog from "./components/ConfirmDialog";
+import ImportAccountsModal from "./components/ImportAccountsModal";
+import RecipientsEditor from "./components/RecipientsEditor";
+import CampaignDetailPage, {
+  CampaignStatusBadge,
+} from "./pages/CampaignDetailPage";
+import SettingsPage from "./pages/SettingsPage";
 import {
   api,
   createRequestKey,
   displayError,
   isRequestAborted,
 } from "./lib/api";
+import {
+  accountStatusLabels,
+  campaignProgress,
+  campaignStatusLabels,
+  eventKindLabels,
+  formatDateTime,
+  plural,
+  startOfTodayIso,
+} from "./lib/format";
 
-type PageName = "overview" | "accounts" | "campaigns" | "events";
+type PageName =
+  | "overview"
+  | "accounts"
+  | "campaigns"
+  | "campaign"
+  | "events"
+  | "settings";
 type GroupForm = {
   name: string;
   color: GroupColor;
@@ -111,6 +142,12 @@ const navItems: Array<{
   { path: "/accounts", label: "Аккаунты", page: "accounts", icon: Mail },
   { path: "/campaigns", label: "Рассылки", page: "campaigns", icon: Send },
   { path: "/events", label: "События", page: "events", icon: Activity },
+  {
+    path: "/settings",
+    label: "Настройки",
+    page: "settings",
+    icon: SettingsIcon,
+  },
 ];
 
 const groupColors: Array<{ value: GroupColor; label: string }> = [
@@ -120,27 +157,24 @@ const groupColors: Array<{ value: GroupColor; label: string }> = [
   { value: "amber", label: "Янтарный" },
 ];
 
-const statusLabels: Record<Account["status"], string> = {
-  active: "Активен",
-  auth_error: "Ошибка входа",
-  needs_check: "Требует проверки",
-  disabled: "Отключён",
-  unverified: "Не проверен",
-};
-
-const eventLabels: Record<Event["kind"], string> = {
-  group_created: "Создана группа",
-  draft_created: "Создан черновик",
-  draft_updated: "Обновлён черновик",
-  demo_seeded: "Демо-данные подготовлены",
-};
+const statusLabels = accountStatusLabels;
+const eventLabels = eventKindLabels;
 
 function routeFromPath(): PageName {
-  const path = window.location.pathname.replace(/\/$/, "") || "/";
-  if (path === "/accounts") return "accounts";
-  if (path === "/campaigns") return "campaigns";
-  if (path === "/events") return "events";
+  const path = window.location.pathname;
+  if (path.startsWith("/accounts")) return "accounts";
+  if (/^\/campaigns\/[0-9a-f-]{36}$/i.test(path)) return "campaign";
+  if (path.startsWith("/campaigns")) return "campaigns";
+  if (path.startsWith("/events")) return "events";
+  if (path.startsWith("/settings")) return "settings";
   return "overview";
+}
+
+function campaignIdFromPath(): string | null {
+  const match = window.location.pathname.match(
+    /^\/campaigns\/([0-9a-f-]{36})$/i
+  );
+  return match ? match[1] : null;
 }
 
 function formatDate(value: string): string {
@@ -179,7 +213,7 @@ function groupColorClass(color: GroupColor): string {
   return `color-${color}`;
 }
 
-function eventIcon(kind: Event["kind"]): ReactNode {
+function eventIcon(kind: string): ReactNode {
   if (kind === "group_created") return <Users size={16} aria-hidden="true" />;
   if (kind === "demo_seeded") return <Sparkles size={16} aria-hidden="true" />;
   return <FilePenLine size={16} aria-hidden="true" />;
@@ -299,10 +333,11 @@ function DemoBanner({ mode }: { mode: Health["mode"] | Overview["mode"] }) {
       <div>
         <strong>Демонстрационный режим</strong>
         <span>
-          Письма не отправляются · данные отделены от локальной работы
+          Тестовый отправитель, подключений к Mail нет · данные отделены от
+          локальной работы
         </span>
       </div>
-      <span className="demo-banner__tag">M1</span>
+      <span className="demo-banner__tag">demo</span>
     </div>
   );
 }
@@ -314,6 +349,9 @@ function App() {
   const [healthError, setHealthError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
+  const [routeCampaignId, setRouteCampaignId] = useState<string | null>(() =>
+    campaignIdFromPath()
+  );
 
   const [overview, setOverview] = useState<Overview | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -336,9 +374,18 @@ function App() {
   const [accountStatus, setAccountStatus] = useState("all");
   const [accountGroupId, setAccountGroupId] = useState("");
   const [accountPage, setAccountPage] = useState(1);
+  const [accountPageSize, setAccountPageSize] = useState(20);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectionByFilter, setSelectionByFilter] = useState(false);
+  const [bulkKind, setBulkKind] = useState<BulkKind | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
   const [campaignSearch, setCampaignSearch] = useState("");
+  const [campaignStatus, setCampaignStatus] = useState("all");
   const [campaignPage, setCampaignPage] = useState(1);
   const [eventKind, setEventKind] = useState("all");
+  const [eventLevel, setEventLevel] = useState("all");
+  const [eventSearch, setEventSearch] = useState("");
   const [eventPage, setEventPage] = useState(1);
 
   const [groupModalOpen, setGroupModalOpen] = useState(false);
@@ -380,6 +427,10 @@ function App() {
   const [draftSaving, setDraftSaving] = useState(false);
   const [draftLoading, setDraftLoading] = useState(false);
   const [draftLoadError, setDraftLoadError] = useState<string | null>(null);
+  const [draftCampaign, setDraftCampaign] = useState<Campaign | null>(null);
+  const [startPrompt, setStartPrompt] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const groupSavingRef = useRef(false);
   const draftSavingRef = useRef(false);
   const requestControllersRef = useRef<
@@ -417,6 +468,7 @@ function App() {
       window.history.pushState({}, "", path);
     }
     setRoute(routeFromPath());
+    setRouteCampaignId(campaignIdFromPath());
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
@@ -430,7 +482,10 @@ function App() {
   );
 
   useEffect(() => {
-    const onPopState = () => setRoute(routeFromPath());
+    const onPopState = () => {
+      setRoute(routeFromPath());
+      setRouteCampaignId(campaignIdFromPath());
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
@@ -459,7 +514,9 @@ function App() {
     setOverviewLoading(true);
     setOverviewError(null);
     try {
-      const nextOverview = await api.overview({ signal: request.signal });
+      const nextOverview = await api.overview(startOfTodayIso(), {
+        signal: request.signal,
+      });
       if (request.isCurrent()) setOverview(nextOverview);
     } catch (error) {
       if (request.isCurrent() && !isRequestAborted(error)) {
@@ -497,7 +554,7 @@ function App() {
       const nextAccounts = await api.accounts(
         {
           page: accountPage,
-          pageSize: 10,
+          pageSize: accountPageSize,
           q: accountSearch.trim() || undefined,
           groupId: accountGroupId || undefined,
           status: accountStatus,
@@ -512,7 +569,14 @@ function App() {
     } finally {
       if (request.isCurrent()) setAccountsLoading(false);
     }
-  }, [accountGroupId, accountPage, accountSearch, accountStatus, beginRequest]);
+  }, [
+    accountGroupId,
+    accountPage,
+    accountPageSize,
+    accountSearch,
+    accountStatus,
+    beginRequest,
+  ]);
 
   const loadCampaigns = useCallback(async () => {
     const request = beginRequest("campaigns");
@@ -524,6 +588,7 @@ function App() {
           page: campaignPage,
           pageSize: 10,
           q: campaignSearch.trim() || undefined,
+          status: campaignStatus,
         },
         { signal: request.signal }
       );
@@ -535,7 +600,7 @@ function App() {
     } finally {
       if (request.isCurrent()) setCampaignsLoading(false);
     }
-  }, [beginRequest, campaignPage, campaignSearch]);
+  }, [beginRequest, campaignPage, campaignSearch, campaignStatus]);
 
   const loadEvents = useCallback(async () => {
     const request = beginRequest("events");
@@ -543,7 +608,13 @@ function App() {
     setEventsError(null);
     try {
       const nextEvents = await api.events(
-        { page: eventPage, pageSize: 15, kind: eventKind },
+        {
+          page: eventPage,
+          pageSize: 15,
+          kind: eventKind,
+          level: eventLevel,
+          q: eventSearch.trim() || undefined,
+        },
         { signal: request.signal }
       );
       if (request.isCurrent()) setEventsPage(nextEvents);
@@ -554,16 +625,17 @@ function App() {
     } finally {
       if (request.isCurrent()) setEventsLoading(false);
     }
-  }, [beginRequest, eventKind, eventPage]);
+  }, [beginRequest, eventKind, eventLevel, eventPage, eventSearch]);
 
   useEffect(() => {
-    if (route === "overview") void loadOverview();
+    if (route !== "overview") return;
+    void loadOverview();
+    const timer = window.setInterval(() => void loadOverview(), 10_000);
+    return () => window.clearInterval(timer);
   }, [loadOverview, refreshToken, route]);
 
   useEffect(() => {
-    if (route === "overview" || route === "accounts" || route === "campaigns") {
-      void loadGroups();
-    }
+    if (route !== "events" && route !== "settings") void loadGroups();
   }, [loadGroups, refreshToken, route]);
 
   useEffect(() => {
@@ -668,6 +740,93 @@ function App() {
 
   const openImportModal = useCallback(() => setImportModalOpen(true), []);
 
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setSelectionByFilter(false);
+  }, []);
+
+  const toggleSelected = useCallback((id: string, checked: boolean) => {
+    setSelectionByFilter(false);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const selectedCount = selectionByFilter
+    ? accountsPage?.total ?? 0
+    : selectedIds.size;
+
+  const runBulk = useCallback(
+    async (action: BulkAccountAction) => {
+      if (selectedCount === 0) return;
+      setBulkBusy(true);
+      setBulkError(null);
+      try {
+        const selection = selectionByFilter
+          ? {
+              filter: {
+                q: accountSearch.trim(),
+                groupId: accountGroupId || undefined,
+                status: accountStatus,
+              },
+            }
+          : { ids: [...selectedIds] };
+        const result = await api.bulkAccounts({
+          ...action,
+          ...selection,
+          requestKey: createRequestKey(),
+        });
+        setBulkKind(null);
+        if (action.action === "check" && result.checked) {
+          showToast(
+            `Проверено ${result.affected}: без замечаний ${result.checked.ok}, с проблемами ${result.checked.problems}`
+          );
+        } else {
+          showToast(`Действие применено к ${result.affected} аккаунтам`);
+        }
+        if (action.action !== "check") clearSelection();
+        setRefreshToken((value) => value + 1);
+      } catch (error) {
+        setBulkError(displayError(error).message);
+      } finally {
+        setBulkBusy(false);
+      }
+    },
+    [
+      accountGroupId,
+      accountSearch,
+      accountStatus,
+      clearSelection,
+      selectedCount,
+      selectedIds,
+      selectionByFilter,
+      showToast,
+    ]
+  );
+
+  const checkOneAccount = useCallback(
+    async (account: Account) => {
+      try {
+        const result = await api.checkAccount(account.id, createRequestKey());
+        showToast(
+          `${account.email}: ${statusLabels[result.account.status]} (${result.method === "mail_smtp" ? "проверка Mail SMTP" : "тестовый отправитель, не Mail"})`
+        );
+        setRefreshToken((value) => value + 1);
+      } catch (error) {
+        showToast(displayError(error).message);
+      }
+    },
+    [showToast]
+  );
+
+  const openCampaign = useCallback(
+    (id: string) => navigate(`/campaigns/${id}`),
+    [navigate]
+  );
+
   const resetDraft = useCallback(() => {
     if (draftSavingRef.current) return;
     beginRequest("detail");
@@ -684,6 +843,8 @@ function App() {
     setDraftFieldErrors({});
     setDraftLoading(false);
     setDraftLoadError(null);
+    setDraftCampaign(null);
+    setStartError(null);
     setDraftModalOpen(true);
   }, [beginRequest, groups]);
 
@@ -705,9 +866,17 @@ function App() {
       setDraftLoading(true);
       setDraftLoadError(null);
       setDraftModalOpen(true);
+      setDraftCampaign(null);
+      setStartError(null);
       try {
         const campaign = await api.campaign(id, { signal: request.signal });
         if (!request.isCurrent()) return;
+        if (campaign.status !== "draft") {
+          setDraftModalOpen(false);
+          navigate(`/campaigns/${campaign.id}`);
+          return;
+        }
+        setDraftCampaign(campaign);
         setDraftForm({
           name: campaign.name,
           groupId: campaign.groupId,
@@ -724,7 +893,7 @@ function App() {
         if (request.isCurrent()) setDraftLoading(false);
       }
     },
-    [beginRequest]
+    [beginRequest, navigate]
   );
 
   const requestCloseDraft = useCallback(() => {
@@ -763,67 +932,138 @@ function App() {
     return errors;
   }, [draftForm]);
 
-  const nextDraftStep = useCallback(() => {
-    if (draftSavingRef.current || draftSaving) return;
-    if (draftStep === 1 && Object.keys(validateDraftRequired()).length > 0)
-      return;
-    setDraftStep((step) => Math.min(4, step + 1));
-  }, [draftSaving, draftStep, validateDraftRequired]);
-
-  const saveDraft = useCallback(async () => {
-    if (draftSavingRef.current || draftSaving) return;
-    if (Object.keys(validateDraftRequired()).length > 0) {
-      setDraftStep(1);
-      return;
+  const persistDraft = useCallback(async (): Promise<Campaign | null> => {
+    const input = {
+      name: draftForm.name.trim(),
+      groupId: draftForm.groupId,
+      senderName: draftForm.senderName.trim(),
+      subject: draftForm.subject,
+      body: draftForm.body,
+    };
+    let campaign: Campaign;
+    if (draftMode === "create" || !draftId) {
+      campaign = await api.createDraft({
+        ...input,
+        requestKey: draftRequestKey,
+      });
+      setDraftMode("edit");
+      setDraftId(campaign.id);
+    } else {
+      campaign = await api.updateDraft(draftId, {
+        ...input,
+        revision: draftRevision,
+      });
     }
-    draftSavingRef.current = true;
-    setDraftSaving(true);
-    setDraftSubmitError(null);
-    try {
-      const input = {
-        name: draftForm.name.trim(),
-        groupId: draftForm.groupId,
-        senderName: draftForm.senderName.trim(),
-        subject: draftForm.subject,
-        body: draftForm.body,
-      };
-      if (draftMode === "create") {
-        const campaign = await api.createDraft({
-          ...input,
-          requestKey: draftRequestKey,
-        });
-        setDraftId(campaign.id);
-        setDraftRevision(campaign.revision);
-      } else if (draftId) {
-        const campaign = await api.updateDraft(draftId, {
-          ...input,
-          revision: draftRevision,
-        });
-        setDraftRevision(campaign.revision);
+    setDraftRevision(campaign.revision);
+    setDraftCampaign(campaign);
+    setDraftDirty(false);
+    return campaign;
+  }, [draftForm, draftId, draftMode, draftRequestKey, draftRevision]);
+
+  const saveDraft = useCallback(
+    async (options: { close: boolean } = { close: true }) => {
+      if (draftSavingRef.current || draftSaving) return null;
+      if (Object.keys(validateDraftRequired()).length > 0) {
+        setDraftStep(1);
+        return null;
       }
+      draftSavingRef.current = true;
+      setDraftSaving(true);
+      setDraftSubmitError(null);
+      try {
+        const campaign =
+          draftDirty || !draftCampaign ? await persistDraft() : draftCampaign;
+        if (options.close) {
+          setDraftModalOpen(false);
+          showToast("Черновик сохранён");
+        }
+        setRefreshToken((value) => value + 1);
+        return campaign;
+      } catch (error) {
+        const nextError = displayError(error);
+        setDraftSubmitError(nextError);
+        if (nextError.fields) setDraftFieldErrors(nextError.fields);
+        if (nextError.network) setDraftRetrySignature(formSignature(draftForm));
+        return null;
+      } finally {
+        draftSavingRef.current = false;
+        setDraftSaving(false);
+      }
+    },
+    [
+      draftCampaign,
+      draftDirty,
+      draftForm,
+      draftSaving,
+      persistDraft,
+      showToast,
+      validateDraftRequired,
+    ]
+  );
+
+  // Recipients belong to a saved draft, so leaving step 1 saves it first.
+  const nextDraftStep = useCallback(async () => {
+    if (draftSavingRef.current || draftSaving) return;
+    if (draftStep === 1) {
+      if (Object.keys(validateDraftRequired()).length > 0) return;
+      if (!(await saveDraft({ close: false }))) return;
+    }
+    setDraftStep((step) => Math.min(4, step + 1));
+  }, [draftSaving, draftStep, saveDraft, validateDraftRequired]);
+
+  const startDraft = useCallback(async () => {
+    setStarting(true);
+    setStartError(null);
+    try {
+      const campaign = await saveDraft({ close: false });
+      if (!campaign) {
+        setStartError("Сначала исправьте ошибки черновика.");
+        return;
+      }
+      const started = await api.campaignAction(
+        campaign.id,
+        "start",
+        createRequestKey()
+      );
+      setStartPrompt(false);
       setDraftDirty(false);
       setDraftModalOpen(false);
-      setRefreshToken((value) => value + 1);
-      showToast("Черновик сохранён");
+      showToast("Рассылка запущена");
+      navigate(`/campaigns/${started.id}`);
     } catch (error) {
-      const nextError = displayError(error);
-      setDraftSubmitError(nextError);
-      if (nextError.fields) setDraftFieldErrors(nextError.fields);
-      if (nextError.network) setDraftRetrySignature(formSignature(draftForm));
+      setStartError(displayError(error).message);
     } finally {
-      draftSavingRef.current = false;
-      setDraftSaving(false);
+      setStarting(false);
     }
-  }, [
-    draftForm,
-    draftId,
-    draftMode,
-    draftRequestKey,
-    draftRevision,
-    draftSaving,
-    showToast,
-    validateDraftRequired,
-  ]);
+  }, [navigate, saveDraft, showToast]);
+
+  const testSend = useCallback(
+    async (recipient: string) => {
+      setStarting(true);
+      setStartError(null);
+      try {
+        const campaign = await saveDraft({ close: false });
+        if (!campaign) {
+          setStartError("Сначала исправьте ошибки черновика.");
+          return;
+        }
+        const test = await api.testSend(
+          campaign.id,
+          recipient,
+          createRequestKey()
+        );
+        setDraftDirty(false);
+        setDraftModalOpen(false);
+        showToast("Тестовая отправка поставлена в очередь");
+        navigate(`/campaigns/${test.id}`);
+      } catch (error) {
+        setStartError(displayError(error).message);
+      } finally {
+        setStarting(false);
+      }
+    },
+    [navigate, saveDraft, showToast]
+  );
 
   const retryDraftDetail = useCallback(() => {
     if (draftId) void openDraft(draftId);
@@ -834,9 +1074,11 @@ function App() {
       ? "Главная"
       : route === "accounts"
         ? "Аккаунты"
-        : route === "campaigns"
+        : route === "campaigns" || route === "campaign"
           ? "Рассылки"
-          : "События";
+          : route === "settings"
+            ? "Настройки"
+            : "События";
 
   return (
     <div className="app-shell">
@@ -855,9 +1097,9 @@ function App() {
           </div>
           <div className="topbar__actions">
             {health?.archiveAvailable ? (
-              <a className="archive-link" href="/download/mailcontrol-m1.zip">
+              <a className="archive-link" href="/download/mailcontrol.zip">
                 <Archive size={15} aria-hidden="true" />
-                Скачать M1 .zip
+                Скачать .zip
               </a>
             ) : null}
             <HealthStatus
@@ -892,7 +1134,7 @@ function App() {
               onRetry={loadOverview}
               onCreateDraft={resetDraft}
               onNavigate={navigate}
-              onOpenDraft={openDraft}
+              onOpenCampaign={openCampaign}
             />
           ) : null}
           {route === "accounts" ? (
@@ -920,6 +1162,35 @@ function App() {
                 setAccountGroupId(value);
               }}
               onPage={setAccountPage}
+              pageSize={accountPageSize}
+              onPageSize={(value) => {
+                setAccountPage(1);
+                setAccountPageSize(value);
+              }}
+              selectedIds={selectedIds}
+              selectionByFilter={selectionByFilter}
+              selectedCount={selectedCount}
+              onToggle={toggleSelected}
+              onSelectPage={(ids, checked) => {
+                setSelectionByFilter(false);
+                setSelectedIds((current) => {
+                  const next = new Set(current);
+                  ids.forEach((id) =>
+                    checked ? next.add(id) : next.delete(id)
+                  );
+                  return next;
+                });
+              }}
+              onSelectFilter={() => {
+                setSelectedIds(new Set());
+                setSelectionByFilter(true);
+              }}
+              onClearSelection={clearSelection}
+              onBulk={(kind) => {
+                setBulkError(null);
+                setBulkKind(kind);
+              }}
+              onCheckOne={(account) => void checkOneAccount(account)}
               onRetry={() => {
                 void loadAccounts();
                 void loadGroups();
@@ -935,15 +1206,40 @@ function App() {
               loading={campaignsLoading}
               error={campaignsError}
               search={campaignSearch}
+              status={campaignStatus}
               page={campaignPage}
               onSearch={(value) => {
                 setCampaignPage(1);
                 setCampaignSearch(value);
               }}
+              onStatus={(value) => {
+                setCampaignPage(1);
+                setCampaignStatus(value);
+              }}
               onPage={setCampaignPage}
               onRetry={loadCampaigns}
               onCreate={resetDraft}
-              onOpen={openDraft}
+              onOpen={(campaign) =>
+                campaign.status === "draft"
+                  ? void openDraft(campaign.id)
+                  : openCampaign(campaign.id)
+              }
+            />
+          ) : null}
+          {route === "campaign" && routeCampaignId ? (
+            <CampaignDetailPage
+              key={routeCampaignId}
+              id={routeCampaignId}
+              onBack={() => navigate("/campaigns")}
+              onEditDraft={(id) => void openDraft(id)}
+              onToast={showToast}
+            />
+          ) : null}
+          {route === "settings" ? (
+            <SettingsPage
+              health={health}
+              onToast={showToast}
+              onSettingsChanged={() => void refreshHealth()}
             />
           ) : null}
           {route === "events" ? (
@@ -952,15 +1248,32 @@ function App() {
               loading={eventsLoading}
               error={eventsError}
               kind={eventKind}
+              level={eventLevel}
+              search={eventSearch}
               page={eventPage}
               onKind={(value) => {
                 setEventPage(1);
                 setEventKind(value);
               }}
+              onLevel={(value) => {
+                setEventPage(1);
+                setEventLevel(value);
+              }}
+              onSearch={(value) => {
+                setEventPage(1);
+                setEventSearch(value);
+              }}
               onPage={setEventPage}
               onRetry={loadEvents}
-              onOpenCampaign={openDraft}
+              onOpenCampaign={openCampaign}
               onOpenGroup={openGroup}
+              onOpenAccount={(email) => {
+                setAccountSearch(email);
+                setAccountStatus("all");
+                setAccountGroupId("");
+                setAccountPage(1);
+                navigate("/accounts");
+              }}
             />
           ) : null}
         </main>
@@ -986,9 +1299,24 @@ function App() {
         }}
       />
 
-      <ImportModal
+      <ImportAccountsModal
         open={importModalOpen}
+        groups={groups}
         onClose={() => setImportModalOpen(false)}
+        onImported={() => setRefreshToken((value) => value + 1)}
+      />
+
+      <BulkActionModal
+        kind={bulkKind}
+        count={selectedCount}
+        groups={groups}
+        senderKind={health?.senderKind ?? "test"}
+        busy={bulkBusy}
+        error={bulkError}
+        onCancel={() => {
+          if (!bulkBusy) setBulkKind(null);
+        }}
+        onConfirm={(action) => void runBulk(action)}
       />
 
       <DraftWizard
@@ -1007,8 +1335,20 @@ function App() {
         onStep={(nextStep) => {
           if (!draftSavingRef.current && !draftSaving) setDraftStep(nextStep);
         }}
-        onNext={nextDraftStep}
-        onSave={saveDraft}
+        onNext={() => void nextDraftStep()}
+        onSave={() => void saveDraft({ close: true })}
+        campaign={draftCampaign}
+        starting={starting}
+        startError={startError}
+        onRecipientsSaved={(campaign) => {
+          setDraftCampaign(campaign);
+          setRefreshToken((value) => value + 1);
+        }}
+        onStart={() => {
+          setStartError(null);
+          setStartPrompt(true);
+        }}
+        onTestSend={(recipient) => void testSend(recipient)}
         onRequestClose={requestCloseDraft}
         onCancelClose={() => setDraftClosePrompt(false)}
         onConfirmClose={() => {
@@ -1018,6 +1358,19 @@ function App() {
           setDraftModalOpen(false);
         }}
         onRetryLoad={retryDraftDetail}
+      />
+
+      <ConfirmDialog
+        open={startPrompt}
+        title="Запустить рассылку?"
+        description={`Получателей: ${draftCampaign?.counts.total ?? 0}. Тема, текст и список будут зафиксированы; дальнейшие изменения — только новой рассылкой.`}
+        confirmLabel="Запустить"
+        busy={starting}
+        error={startError}
+        onCancel={() => {
+          if (!starting) setStartPrompt(false);
+        }}
+        onConfirm={() => void startDraft()}
       />
 
       {toast ? (
@@ -1097,8 +1450,16 @@ function Sidebar({
             <ShieldCheck size={16} aria-hidden="true" />
           </span>
           <div>
-            <strong>Первый этап M1</strong>
-            <span>Сохранение и обзор</span>
+            <strong>
+              {health?.sendingEnabled
+                ? "Реальная отправка Mail"
+                : "Тестовый отправитель"}
+            </strong>
+            <span>
+              {health
+                ? `${health.workersAlive} ${plural(health.workersAlive, "процесс", "процесса", "процессов")} отправки`
+                : "Проверяем состояние…"}
+            </span>
           </div>
         </div>
         <div className="sidebar__meta">
@@ -1179,7 +1540,7 @@ function OverviewPage({
   onRetry,
   onCreateDraft,
   onNavigate,
-  onOpenDraft,
+  onOpenCampaign,
 }: {
   overview: Overview | null;
   loading: boolean;
@@ -1187,14 +1548,15 @@ function OverviewPage({
   onRetry: () => void;
   onCreateDraft: () => void;
   onNavigate: (path: string) => void;
-  onOpenDraft: (id: string) => void;
+  onOpenCampaign: (id: string) => void;
 }) {
+  const aliveWorkers = overview?.workers.filter((worker) => worker.alive) ?? [];
   return (
     <>
       <PageHeader
         eyebrow="Обзор рабочей области"
         title="Главная"
-        description="Сводка по аккаунтам, черновикам и последним действиям"
+        description="Сводка по очереди, аккаунтам, рассылкам и последним событиям"
         action={
           <button
             type="button"
@@ -1215,122 +1577,122 @@ function OverviewPage({
           <section className="metric-grid" aria-label="Сводные показатели">
             <MetricCard
               icon={<Send size={19} aria-hidden="true" />}
-              label="Принято сегодня"
-              value={overview.acceptedToday}
-              hint="Отправка отключена в M1"
+              label="Принято сервисом сегодня"
+              value={overview.acceptedSince}
+              hint={
+                overview.sendingEnabled
+                  ? "Приём письмом Mail, не доставка во «Входящие»"
+                  : "Тестовый отправитель: письма не уходят в интернет"
+              }
               tone="blue"
             />
             <MetricCard
               icon={<Inbox size={19} aria-hidden="true" />}
-              label="Задач в очереди"
+              label="Задач в ожидании"
               value={overview.queuedTasks}
-              hint="Очередь появится в M3"
+              hint={
+                overview.sendingTasks
+                  ? `${overview.sendingTasks} отправляется сейчас`
+                  : overview.unclearTasks
+                    ? `${overview.unclearTasks} с неясным исходом`
+                    : "Очередь хранится в базе"
+              }
               tone="violet"
             />
             <MetricCard
               icon={<Mail size={19} aria-hidden="true" />}
-              label="Почтовых аккаунтов"
-              value={overview.accountCount}
+              label="Доступных аккаунтов"
+              value={overview.availableAccountCount}
               hint={
                 overview.problemAccountCount
-                  ? `${overview.problemAccountCount} требуют внимания`
-                  : "Состояние из базы"
+                  ? `${overview.problemAccountCount} требуют внимания из ${overview.accountCount}`
+                  : `Всего ${overview.accountCount}`
               }
               tone="green"
             />
             <MetricCard
-              icon={<FilePenLine size={19} aria-hidden="true" />}
-              label="Черновиков"
-              value={overview.draftCount}
-              hint="Можно редактировать и сохранять"
+              icon={<Cpu size={19} aria-hidden="true" />}
+              label="Процессов отправки"
+              value={aliveWorkers.length}
+              hint={
+                aliveWorkers.length
+                  ? "По свежим подтверждениям работы"
+                  : "Нет подтверждений — отправка не идёт"
+              }
               tone="amber"
             />
           </section>
+          {overview.unclearTasks ? (
+            <div className="info-strip info-strip--warning" role="status">
+              <AlertTriangle size={16} aria-hidden="true" />
+              <span>
+                {overview.unclearTasks}{" "}
+                {plural(overview.unclearTasks, "задача", "задачи", "задач")} с
+                неясным исходом ждут решения оператора.
+              </span>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => onNavigate("/campaigns")}
+              >
+                К рассылкам <ArrowRight size={14} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
           <section className="overview-grid">
-            <article className="card stage-card">
-              <div className="card-heading">
-                <div>
-                  <span className="card-kicker">Текущее состояние</span>
-                  <h2>M1 · Сохранение и обзор</h2>
-                </div>
-                <span className="stage-mark">
-                  <Check size={16} aria-hidden="true" />
-                </span>
-              </div>
-              <p className="stage-card__lead">
-                Группы и черновики сохраняются через API. Реальной отправки
-                писем пока нет — это честно отражено в счётчиках и действиях.
-              </p>
-              <div className="stage-checklist">
-                <div>
-                  <CheckCircle2 size={17} aria-hidden="true" />
-                  Демо-режим отделён от локальных данных
-                </div>
-                <div>
-                  <CheckCircle2 size={17} aria-hidden="true" />
-                  Отправитель появится на следующих этапах
-                </div>
-                <div>
-                  <CircleHelp size={17} aria-hidden="true" />
-                  Лимиты без расчёта до M2
-                </div>
-              </div>
-              <div className="stage-card__footer">
-                <span className="subtle-label">
-                  <Database size={15} aria-hidden="true" />
-                  {overview.groupCount} групп сохранено
-                </span>
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => onNavigate("/accounts")}
-                >
-                  Открыть группы <ArrowRight size={14} aria-hidden="true" />
-                </button>
-              </div>
-            </article>
             <article className="card list-card">
               <div className="card-heading">
                 <div>
-                  <span className="card-kicker">Работа с контентом</span>
-                  <h2>Последние черновики</h2>
+                  <span className="card-kicker">В работе</span>
+                  <h2>Активные рассылки</h2>
                 </div>
                 <button
                   type="button"
                   className="icon-link"
                   onClick={() => onNavigate("/campaigns")}
                 >
-                  Все черновики <ArrowRight size={14} aria-hidden="true" />
+                  Все рассылки <ArrowRight size={14} aria-hidden="true" />
                 </button>
               </div>
-              {overview.recentCampaigns.length ? (
+              {overview.activeCampaigns.length ? (
                 <div className="compact-list">
-                  {overview.recentCampaigns.slice(0, 4).map((campaign) => (
-                    <button
-                      type="button"
-                      className="compact-list__item"
-                      key={campaign.id}
-                      onClick={() => onOpenDraft(campaign.id)}
-                    >
-                      <span className="compact-list__icon">
-                        <FileText size={16} aria-hidden="true" />
-                      </span>
-                      <span className="compact-list__body">
-                        <strong>{campaign.name}</strong>
-                        <span>
-                          {campaign.groupName} ·{" "}
-                          {formatShortDate(campaign.updatedAt)}
+                  {overview.activeCampaigns.slice(0, 5).map((campaign) => {
+                    const progress = campaignProgress(campaign.counts);
+                    return (
+                      <button
+                        type="button"
+                        className="compact-list__item compact-list__item--progress"
+                        key={campaign.id}
+                        onClick={() => onOpenCampaign(campaign.id)}
+                      >
+                        <span className="compact-list__icon">
+                          {campaign.status === "paused" ? (
+                            <Pause size={16} aria-hidden="true" />
+                          ) : (
+                            <Play size={16} aria-hidden="true" />
+                          )}
                         </span>
-                      </span>
-                      <Pencil size={14} aria-hidden="true" />
-                    </button>
-                  ))}
+                        <span className="compact-list__body">
+                          <strong>{campaign.name}</strong>
+                          <span>
+                            <CampaignStatusBadge campaign={campaign} /> ·
+                            принято {campaign.counts.accepted} из{" "}
+                            {campaign.counts.total}
+                          </span>
+                          <span className="mini-progress" aria-hidden="true">
+                            <span style={{ width: `${progress.percent}%` }} />
+                          </span>
+                        </span>
+                        <ArrowRight size={14} aria-hidden="true" />
+                      </button>
+                    );
+                  })}
                 </div>
               ) : (
                 <EmptyState
-                  icon={<FilePenLine size={22} aria-hidden="true" />}
-                  title="Пока нет черновиков"
-                  description="Создайте первую рассылку, чтобы сохранить тему и текст."
+                  icon={<Send size={22} aria-hidden="true" />}
+                  title="Сейчас ничего не отправляется"
+                  description="Запустите рассылку из мастера — прогресс появится здесь."
                   action={
                     <button
                       type="button"
@@ -1338,10 +1700,64 @@ function OverviewPage({
                       onClick={onCreateDraft}
                     >
                       <Plus size={15} aria-hidden="true" />
-                      Создать черновик
+                      Создать рассылку
                     </button>
                   }
                 />
+              )}
+            </article>
+            <article className="card list-card">
+              <div className="card-heading">
+                <div>
+                  <span className="card-kicker">Процессы</span>
+                  <h2>Отправка</h2>
+                </div>
+              </div>
+              <div className="sender-mode">
+                <span
+                  className={`status-badge status-badge--${overview.sendingEnabled ? "blocked" : "active"}`}
+                >
+                  <span className="status-dot" aria-hidden="true" />
+                  {overview.sendingEnabled
+                    ? "Реальная отправка Mail"
+                    : "Тестовый отправитель"}
+                </span>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => onNavigate("/settings")}
+                >
+                  Настройки <ArrowRight size={14} aria-hidden="true" />
+                </button>
+              </div>
+              {overview.workers.length ? (
+                <div className="worker-list">
+                  {overview.workers.slice(0, 4).map((worker) => (
+                    <div
+                      className={`worker-row${worker.alive ? "" : " worker-row--stale"}`}
+                      key={worker.id}
+                    >
+                      <span className="mini-dot" aria-hidden="true" />
+                      <div>
+                        <strong>
+                          {worker.hostname} · pid {worker.pid}
+                        </strong>
+                        <span>
+                          {worker.alive ? "работает" : "нет подтверждений"} ·
+                          последнее: {formatDateTime(worker.lastHeartbeatAt)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="inline-empty">
+                  <Cpu size={19} aria-hidden="true" />
+                  <span>
+                    Процесс отправки ещё не запускался. В Docker он стартует
+                    вместе с приложением.
+                  </span>
+                </div>
               )}
             </article>
             <article className="card list-card">
@@ -1360,10 +1776,10 @@ function OverviewPage({
               </div>
               {overview.recentEvents.length ? (
                 <div className="event-list event-list--compact">
-                  {overview.recentEvents.slice(0, 5).map((event) => (
+                  {overview.recentEvents.slice(0, 6).map((event) => (
                     <div className="event-row" key={event.id}>
                       <span
-                        className={`event-dot event-dot--${event.kind}`}
+                        className={`event-dot event-dot--${event.level}`}
                         aria-hidden="true"
                       />
                       <div>
@@ -1402,10 +1818,21 @@ function AccountsPage({
   status,
   groupId,
   page,
+  pageSize,
+  selectedIds,
+  selectionByFilter,
+  selectedCount,
   onSearch,
   onStatus,
   onGroup,
   onPage,
+  onPageSize,
+  onToggle,
+  onSelectPage,
+  onSelectFilter,
+  onClearSelection,
+  onBulk,
+  onCheckOne,
   onRetry,
   onCreateGroup,
   onImport,
@@ -1420,33 +1847,59 @@ function AccountsPage({
   status: string;
   groupId: string;
   page: number;
+  pageSize: number;
+  selectedIds: Set<string>;
+  selectionByFilter: boolean;
+  selectedCount: number;
   onSearch: (value: string) => void;
   onStatus: (value: string) => void;
   onGroup: (value: string) => void;
   onPage: (value: number) => void;
+  onPageSize: (value: number) => void;
+  onToggle: (id: string, checked: boolean) => void;
+  onSelectPage: (ids: string[], checked: boolean) => void;
+  onSelectFilter: () => void;
+  onClearSelection: () => void;
+  onBulk: (kind: BulkKind) => void;
+  onCheckOne: (account: Account) => void;
   onRetry: () => void;
   onCreateGroup: () => void;
   onImport: () => void;
 }) {
+  const pageIds = accounts?.items.map((account) => account.id) ?? [];
+  const allOnPage =
+    pageIds.length > 0 &&
+    (selectionByFilter || pageIds.every((id) => selectedIds.has(id)));
+  const problemStatuses: AccountStatus[] = [
+    "auth_error",
+    "needs_check",
+    "blocked",
+    "temporary_error",
+  ];
   const problemCount =
     accounts?.items.filter((account) =>
-      ["auth_error", "needs_check"].includes(account.status)
+      problemStatuses.includes(account.status)
     ).length ?? 0;
+  const exhaustedCount =
+    accounts?.items.filter((account) => account.status === "quota_exhausted")
+      .length ?? 0;
   return (
     <>
       <PageHeader
         eyebrow="Группы и отправители"
         title="Аккаунты"
-        description="Группы уже можно создавать. Импорт почтовых доступов и лимиты откроются в M2."
+        description="Импорт доступов, индивидуальные скользящие лимиты и состояние подключений"
         action={
           <div className="button-row">
             <button
               type="button"
               className="button button--secondary"
               onClick={onImport}
+              disabled={!groups.length}
+              title={groups.length ? undefined : "Сначала создайте группу"}
             >
               <UploadCloud size={17} aria-hidden="true" />
-              Импорт · M2
+              Импорт аккаунтов
             </button>
             <button
               type="button"
@@ -1466,7 +1919,7 @@ function AccountsPage({
           </span>
           <span>
             <strong>{groups.length}</strong>
-            <small>Групп на странице</small>
+            <small>Групп</small>
           </span>
         </div>
         <div className="summary-chip">
@@ -1489,11 +1942,11 @@ function AccountsPage({
         </div>
         <div className="summary-chip summary-chip--quiet">
           <span className="summary-chip__icon summary-chip__icon--slate">
-            <Info size={17} aria-hidden="true" />
+            <Clock3 size={17} aria-hidden="true" />
           </span>
           <span>
-            <strong>Без квоты</strong>
-            <small>Расчёт доступен с M2</small>
+            <strong>{accounts ? exhaustedCount : 0}</strong>
+            <small>Лимит исчерпан на странице</small>
           </span>
         </div>
       </section>
@@ -1517,8 +1970,7 @@ function AccountsPage({
           <div className="inline-empty">
             <FolderOpen size={19} aria-hidden="true" />
             <span>
-              Групп пока нет. Создайте первую, чтобы сохранить черновик
-              рассылки.
+              Групп пока нет. Создайте первую, чтобы импортировать аккаунты.
             </span>
             <button
               type="button"
@@ -1531,12 +1983,12 @@ function AccountsPage({
         ) : null}
         {groups.length ? (
           <div className="group-cards">
-            {groups.slice(0, 6).map((group) => (
+            {groups.slice(0, 8).map((group) => (
               <button
                 type="button"
-                className="group-card"
+                className={`group-card${groupId === group.id ? " group-card--active" : ""}`}
                 key={group.id}
-                onClick={() => onGroup(group.id)}
+                onClick={() => onGroup(groupId === group.id ? "" : group.id)}
               >
                 <span
                   className={`group-card__mark ${groupColorClass(group.color)}`}
@@ -1545,7 +1997,15 @@ function AccountsPage({
                 </span>
                 <span className="group-card__body">
                   <strong>{group.name}</strong>
-                  <span>{group.accountCount} аккаунтов</span>
+                  <span>
+                    {group.accountCount}{" "}
+                    {plural(
+                      group.accountCount,
+                      "аккаунт",
+                      "аккаунта",
+                      "аккаунтов"
+                    )}
+                  </span>
                 </span>
                 <span className="group-card__limit">
                   {group.limitCount} / {group.periodHours} ч
@@ -1558,11 +2018,11 @@ function AccountsPage({
       <section className="card table-card">
         <div className="table-card__header">
           <div>
-            <span className="card-kicker">Состояние подключений</span>
+            <span className="card-kicker">Состояние подключений и квот</span>
             <h2>Почтовые аккаунты</h2>
           </div>
           <span className="table-note">
-            M1 показывает только сохранённые данные
+            Квота — скользящее окно; время в вашем часовом поясе
           </span>
         </div>
         <div className="table-toolbar">
@@ -1584,12 +2044,12 @@ function AccountsPage({
               onChange={(event) => onStatus(event.target.value)}
             >
               <option value="all">Все статусы</option>
-              <option value="active">Активные</option>
               <option value="problem">Требуют внимания</option>
-              <option value="auth_error">Ошибка входа</option>
-              <option value="needs_check">Требуют проверки</option>
-              <option value="disabled">Отключённые</option>
-              <option value="unverified">Не проверены</option>
+              {(Object.keys(statusLabels) as AccountStatus[]).map((value) => (
+                <option key={value} value={value}>
+                  {statusLabels[value]}
+                </option>
+              ))}
             </select>
             <ChevronDown size={14} aria-hidden="true" />
           </label>
@@ -1609,7 +2069,88 @@ function AccountsPage({
             </select>
             <ChevronDown size={14} aria-hidden="true" />
           </label>
+          <label className="select-field">
+            <span className="sr-only">Размер страницы</span>
+            <select
+              value={pageSize}
+              onChange={(event) => onPageSize(Number(event.target.value))}
+            >
+              {[20, 50, 100].map((size) => (
+                <option key={size} value={size}>
+                  по {size}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={14} aria-hidden="true" />
+          </label>
         </div>
+        {selectedCount > 0 ? (
+          <div
+            className="bulk-bar"
+            role="region"
+            aria-label="Массовые действия"
+          >
+            <strong>
+              Выбрано {selectedCount}
+              {selectionByFilter ? " — все по текущему фильтру" : ""}
+            </strong>
+            {!selectionByFilter &&
+            accounts &&
+            accounts.total > selectedCount ? (
+              <button
+                type="button"
+                className="text-button"
+                onClick={onSelectFilter}
+              >
+                Выбрать все по фильтру ({accounts.total})
+              </button>
+            ) : null}
+            <span className="bulk-bar__spacer" />
+            <button
+              type="button"
+              className="button button--ghost button--small"
+              onClick={() => onBulk("set_limit")}
+            >
+              Изменить лимит
+            </button>
+            <button
+              type="button"
+              className="button button--ghost button--small"
+              onClick={() => onBulk("move")}
+            >
+              Перенести
+            </button>
+            <button
+              type="button"
+              className="button button--ghost button--small"
+              onClick={() => onBulk("check")}
+            >
+              Проверить
+            </button>
+            <button
+              type="button"
+              className="button button--ghost button--small"
+              onClick={() => onBulk("enable")}
+            >
+              Включить
+            </button>
+            <button
+              type="button"
+              className="button button--ghost button--small button--danger-text"
+              onClick={() => onBulk("disable")}
+            >
+              Отключить
+            </button>
+            <button
+              type="button"
+              className="icon-button icon-button--small"
+              aria-label="Снять выбор"
+              onClick={onClearSelection}
+            >
+              <X size={15} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
         {loading && !accounts ? <LoadingState /> : null}
         {error && !accounts ? (
           <ErrorState message={error} onRetry={onRetry} />
@@ -1617,64 +2158,141 @@ function AccountsPage({
         {accounts && accounts.items.length ? (
           <>
             <div className="table-scroll">
-              <table>
+              <table className="accounts-table">
                 <thead>
                   <tr>
+                    <th className="checkbox-cell">
+                      <input
+                        type="checkbox"
+                        aria-label="Выбрать все на странице"
+                        checked={allOnPage}
+                        onChange={(event) =>
+                          onSelectPage(pageIds, event.target.checked)
+                        }
+                      />
+                    </th>
                     <th>Email</th>
                     <th>Группа</th>
                     <th>Статус</th>
-                    <th>Лимит аккаунта</th>
-                    <th>Режим</th>
+                    <th>Использовано</th>
+                    <th>Лимит</th>
+                    <th>Остаток</th>
+                    <th>Не раньше</th>
                     <th className="table-actions-cell">
                       <span className="sr-only">Действия</span>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {accounts.items.map((account) => (
-                    <tr key={account.id}>
-                      <td>
-                        <div className="email-cell">
-                          <span className="avatar-placeholder">
-                            <Mail size={14} aria-hidden="true" />
-                          </span>
-                          <strong>{account.email}</strong>
-                        </div>
-                      </td>
-                      <td>
-                        <GroupBadge
-                          group={{
-                            name: account.groupName,
-                            color: account.groupColor,
-                          }}
-                        />
-                      </td>
-                      <td>
-                        <StatusBadge status={account.status} />
-                      </td>
-                      <td>
-                        <span className="muted-value">
+                  {accounts.items.map((account) => {
+                    const ratio = account.limitCount
+                      ? Math.min(account.quotaUsed / account.limitCount, 1)
+                      : 0;
+                    return (
+                      <tr
+                        key={account.id}
+                        className={
+                          selectedIds.has(account.id) || selectionByFilter
+                            ? "row--selected"
+                            : undefined
+                        }
+                      >
+                        <td className="checkbox-cell">
+                          <input
+                            type="checkbox"
+                            aria-label={`Выбрать ${account.email}`}
+                            checked={
+                              selectionByFilter || selectedIds.has(account.id)
+                            }
+                            onChange={(event) =>
+                              onToggle(account.id, event.target.checked)
+                            }
+                          />
+                        </td>
+                        <td>
+                          <div className="email-cell">
+                            <span
+                              className="avatar-placeholder"
+                              aria-hidden="true"
+                            >
+                              {account.email.slice(0, 1).toUpperCase()}
+                            </span>
+                            <span>
+                              <strong>{account.email}</strong>
+                              {account.demo ? (
+                                <small className="muted-value">
+                                  {" "}
+                                  · демо, без пароля
+                                </small>
+                              ) : null}
+                            </span>
+                          </div>
+                        </td>
+                        <td>
+                          <GroupBadge
+                            group={{
+                              name: account.groupName,
+                              color: account.groupColor,
+                            }}
+                          />
+                        </td>
+                        <td>
+                          <StatusBadge status={account.status} />
+                          {account.connectionError &&
+                          account.status !== "active" ? (
+                            <div
+                              className="cell-note"
+                              title={account.connectionError}
+                            >
+                              {account.connectionError}
+                            </div>
+                          ) : null}
+                          {account.disabledReason &&
+                          account.status === "disabled" ? (
+                            <div className="cell-note">
+                              {account.disabledReason}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td>
+                          <div className="quota-cell">
+                            <span>
+                              {account.quotaUsed} / {account.limitCount}
+                            </span>
+                            <span className="quota-bar" aria-hidden="true">
+                              <span
+                                className={`quota-bar__fill${ratio >= 1 ? " quota-bar__fill--full" : ""}`}
+                                style={{ width: `${ratio * 100}%` }}
+                              />
+                            </span>
+                          </div>
+                        </td>
+                        <td className="muted-value">
                           {account.limitCount} писем / {account.periodHours} ч
-                        </span>
-                      </td>
-                      <td>
-                        <span className="mode-label">
-                          <span className="mode-dot" aria-hidden="true" />
-                          {account.demo ? "Демо" : "Локальный"}
-                        </span>
-                      </td>
-                      <td className="table-actions-cell">
-                        <button
-                          type="button"
-                          className="icon-button icon-button--small"
-                          aria-label={`Действия для ${account.email}`}
-                          disabled
-                        >
-                          <MoreHorizontal size={17} aria-hidden="true" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td>
+                          <strong>{account.quotaRemaining}</strong>
+                        </td>
+                        <td className="muted-value">
+                          {account.nextFreeAt
+                            ? formatDateTime(account.nextFreeAt)
+                            : "—"}
+                        </td>
+                        <td className="table-actions-cell">
+                          <button
+                            type="button"
+                            className="button button--ghost button--small"
+                            onClick={() => onCheckOne(account)}
+                            disabled={account.status === "disabled"}
+                            title="Проверить подключение без письма"
+                          >
+                            <RefreshCw size={14} aria-hidden="true" />
+                            Проверить
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1697,16 +2315,16 @@ function AccountsPage({
             description={
               search || status !== "all" || groupId
                 ? "Измените фильтры и попробуйте снова."
-                : "Добавление почтовых доступов появится в M2. Сейчас можно подготовить группу."
+                : "Импортируйте почтовые аккаунты Mail вставкой строк, TXT или CSV."
             }
             action={
-              !search && status === "all" && !groupId ? (
+              !search && status === "all" && !groupId && groups.length ? (
                 <button
                   type="button"
                   className="button button--secondary button--small"
                   onClick={onImport}
                 >
-                  Открыть макет импорта
+                  Импортировать аккаунты
                 </button>
               ) : undefined
             }
@@ -1723,8 +2341,10 @@ function CampaignsPage({
   loading,
   error,
   search,
+  status,
   page,
   onSearch,
+  onStatus,
   onPage,
   onRetry,
   onCreate,
@@ -1735,42 +2355,45 @@ function CampaignsPage({
   loading: boolean;
   error: string | null;
   search: string;
+  status: string;
   page: number;
   onSearch: (value: string) => void;
+  onStatus: (value: string) => void;
   onPage: (value: number) => void;
   onRetry: () => void;
   onCreate: () => void;
-  onOpen: (id: string) => void;
+  onOpen: (campaign: CampaignSummary) => void;
 }) {
   return (
     <>
       <PageHeader
-        eyebrow="Контент и черновики"
+        eyebrow="Подготовка и отправка"
         title="Рассылки"
-        description="Четыре шага помогают собрать письмо. Запуск и получатели будут доступны в M3."
+        description="Мастер собирает письмо за четыре шага; карточка рассылки показывает прогресс и действия."
         action={
           <button
             type="button"
             className="button button--primary"
             onClick={onCreate}
+            disabled={!groups.length}
           >
             <Plus size={17} aria-hidden="true" />
-            Новый черновик
+            Новая рассылка
           </button>
         }
       />
       <section className="card table-card campaign-card">
         <div className="table-card__header">
           <div>
-            <span className="card-kicker">История подготовки</span>
-            <h2>Черновики рассылок</h2>
+            <span className="card-kicker">Черновики, работа и итоги</span>
+            <h2>Все рассылки</h2>
           </div>
-          <span className="table-note">{campaigns?.total ?? 0} сохранено</span>
+          <span className="table-note">{campaigns?.total ?? 0} по фильтру</span>
         </div>
         <div className="table-toolbar">
           <label className="search-field search-field--wide">
             <Search size={16} aria-hidden="true" />
-            <span className="sr-only">Поиск по черновикам</span>
+            <span className="sr-only">Поиск по рассылкам</span>
             <input
               type="search"
               value={search}
@@ -1778,9 +2401,27 @@ function CampaignsPage({
               placeholder="Поиск по названию или теме…"
             />
           </label>
-          <span className="toolbar-hint">
-            <Info size={15} aria-hidden="true" />В M1 доступно только сохранение
-          </span>
+          <label className="select-field">
+            <ListFilter size={15} aria-hidden="true" />
+            <span className="sr-only">Фильтр состояния</span>
+            <select
+              value={status}
+              onChange={(event) => onStatus(event.target.value)}
+            >
+              <option value="all">Все состояния</option>
+              <option value="active">В работе (выполняется и пауза)</option>
+              {(
+                Object.keys(campaignStatusLabels) as Array<
+                  keyof typeof campaignStatusLabels
+                >
+              ).map((value) => (
+                <option key={value} value={value}>
+                  {campaignStatusLabels[value]}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={14} aria-hidden="true" />
+          </label>
         </div>
         {loading && !campaigns ? <LoadingState /> : null}
         {error && !campaigns ? (
@@ -1789,43 +2430,59 @@ function CampaignsPage({
         {campaigns && campaigns.items.length ? (
           <>
             <div className="campaign-list">
-              {campaigns.items.map((campaign) => (
-                <button
-                  type="button"
-                  className="campaign-row"
-                  key={campaign.id}
-                  onClick={() => onOpen(campaign.id)}
-                >
-                  <span
-                    className={`campaign-row__icon ${groupColorClass(campaign.groupColor)}`}
+              {campaigns.items.map((campaign) => {
+                const progress = campaignProgress(campaign.counts);
+                return (
+                  <button
+                    type="button"
+                    className="campaign-row"
+                    key={campaign.id}
+                    onClick={() => onOpen(campaign)}
                   >
-                    <FileText size={18} aria-hidden="true" />
-                  </span>
-                  <span className="campaign-row__main">
-                    <strong>{campaign.name}</strong>
-                    <span>
-                      {campaign.subject || "Без темы"} ·{" "}
-                      {campaign.bodyPreview || "Текст пока не добавлен"}
+                    <span
+                      className={`campaign-row__icon ${groupColorClass(campaign.groupColor)}`}
+                    >
+                      {campaign.status === "draft" ? (
+                        <FileText size={18} aria-hidden="true" />
+                      ) : (
+                        <Send size={18} aria-hidden="true" />
+                      )}
                     </span>
-                  </span>
-                  <span className="campaign-row__group">
-                    <GroupBadge
-                      group={{
-                        name: campaign.groupName,
-                        color: campaign.groupColor,
-                      }}
-                    />
-                  </span>
-                  <span className="draft-status">
-                    <span className="status-dot" aria-hidden="true" />
-                    Черновик
-                  </span>
-                  <span className="campaign-row__date">
-                    {formatShortDate(campaign.updatedAt)}
-                  </span>
-                  <ChevronRight size={17} aria-hidden="true" />
-                </button>
-              ))}
+                    <span className="campaign-row__main">
+                      <strong>
+                        {campaign.name}
+                        {campaign.isTest ? (
+                          <span className="test-mark">тестовая отправка</span>
+                        ) : null}
+                      </strong>
+                      <span>
+                        {campaign.subject || "Без темы"} ·{" "}
+                        {campaign.status === "draft"
+                          ? `${campaign.counts.total} ${plural(campaign.counts.total, "получатель", "получателя", "получателей")}`
+                          : `принято ${campaign.counts.accepted} из ${campaign.counts.total}${campaign.counts.unclear ? `, неясных ${campaign.counts.unclear}` : ""}${campaign.counts.failed ? `, ошибок ${campaign.counts.failed}` : ""}`}
+                      </span>
+                      {campaign.status !== "draft" ? (
+                        <span className="mini-progress" aria-hidden="true">
+                          <span style={{ width: `${progress.percent}%` }} />
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="campaign-row__group">
+                      <GroupBadge
+                        group={{
+                          name: campaign.groupName,
+                          color: campaign.groupColor,
+                        }}
+                      />
+                    </span>
+                    <CampaignStatusBadge campaign={campaign} />
+                    <span className="campaign-row__date">
+                      {formatShortDate(campaign.updatedAt)}
+                    </span>
+                    <ChevronRight size={17} aria-hidden="true" />
+                  </button>
+                );
+              })}
             </div>
             <Pagination
               page={page}
@@ -1839,13 +2496,15 @@ function CampaignsPage({
           <EmptyState
             icon={<FilePenLine size={23} aria-hidden="true" />}
             title={
-              search ? "Черновики не найдены" : "Начните с первого черновика"
+              search || status !== "all"
+                ? "Рассылки не найдены"
+                : "Начните с первой рассылки"
             }
             description={
-              search
-                ? "Проверьте поисковый запрос."
+              search || status !== "all"
+                ? "Проверьте фильтры."
                 : groups.length
-                  ? "Сохраните название, группу, тему и обычный текст — без фиктивного запуска."
+                  ? "Название, группа, получатели, тема и текст — затем тестовое письмо и запуск."
                   : "Сначала создайте группу аккаунтов в разделе «Аккаунты»."
             }
             action={
@@ -1856,24 +2515,12 @@ function CampaignsPage({
                 disabled={!groups.length}
               >
                 <Plus size={15} aria-hidden="true" />
-                Создать черновик
+                Создать рассылку
               </button>
             }
           />
         ) : null}
       </section>
-      <div className="info-strip">
-        <span className="info-strip__icon">
-          <ShieldCheck size={17} aria-hidden="true" />
-        </span>
-        <div>
-          <strong>Письма не отправляются</strong>
-          <span>
-            Кнопка запуска намеренно отключена до M3. Данные черновика можно
-            менять и сохранять повторно.
-          </span>
-        </div>
-      </div>
     </>
   );
 }
@@ -1883,55 +2530,88 @@ function EventsPage({
   loading,
   error,
   kind,
+  level,
+  search,
   page,
   onKind,
+  onLevel,
+  onSearch,
   onPage,
   onRetry,
   onOpenCampaign,
   onOpenGroup,
+  onOpenAccount,
 }: {
   events: Page<Event> | null;
   loading: boolean;
   error: string | null;
   kind: string;
+  level: string;
+  search: string;
   page: number;
   onKind: (value: string) => void;
+  onLevel: (value: string) => void;
+  onSearch: (value: string) => void;
   onPage: (value: number) => void;
   onRetry: () => void;
   onOpenCampaign: (id: string) => void;
   onOpenGroup: (id: string) => void;
+  onOpenAccount: (email: string) => void;
 }) {
+  const emailIn = (text: string) =>
+    text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i)?.[0] ?? null;
   return (
     <>
       <PageHeader
-        eyebrow="Прозрачная история действий"
+        eyebrow="Журнал"
         title="События"
-        description="Изменения групп и черновиков с локальным временем оператора."
-        action={
-          <span className="page-header__quiet">
-            <Clock3 size={16} aria-hidden="true" />
-            Часовой пояс: {timeZone}
-          </span>
-        }
+        description="Действия оператора, ошибки отправки и решения по задачам с переходом к рассылке, аккаунту и попытке"
       />
-      <section className="card events-card">
+      <section className="card table-card events-card">
         <div className="table-card__header">
           <div>
-            <span className="card-kicker">Журнал действий</span>
-            <h2>Последние события</h2>
+            <span className="card-kicker">Хронология</span>
+            <h2>Журнал событий</h2>
           </div>
+          <span className="table-note">{events?.total ?? 0} по фильтру</span>
+        </div>
+        <div className="table-toolbar">
+          <label className="search-field">
+            <Search size={16} aria-hidden="true" />
+            <span className="sr-only">Поиск по событиям</span>
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => onSearch(event.target.value)}
+              placeholder="Поиск по тексту или адресу…"
+            />
+          </label>
           <label className="select-field">
             <ListFilter size={15} aria-hidden="true" />
-            <span className="sr-only">Фильтр событий</span>
+            <span className="sr-only">Уровень</span>
+            <select
+              value={level}
+              onChange={(event) => onLevel(event.target.value)}
+            >
+              <option value="all">Все уровни</option>
+              <option value="info">Сведения</option>
+              <option value="warning">Предупреждения</option>
+              <option value="error">Ошибки</option>
+            </select>
+            <ChevronDown size={14} aria-hidden="true" />
+          </label>
+          <label className="select-field">
+            <span className="sr-only">Вид события</span>
             <select
               value={kind}
               onChange={(event) => onKind(event.target.value)}
             >
-              <option value="all">Все события</option>
-              <option value="group_created">Создание группы</option>
-              <option value="draft_created">Новые черновики</option>
-              <option value="draft_updated">Изменение черновиков</option>
-              <option value="demo_seeded">Подготовка демо</option>
+              <option value="all">Все виды</option>
+              {Object.entries(eventLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
             </select>
             <ChevronDown size={14} aria-hidden="true" />
           </label>
@@ -1943,44 +2623,71 @@ function EventsPage({
         {events && events.items.length ? (
           <>
             <div className="event-list event-list--full">
-              {events.items.map((event) => (
-                <div className="event-detail-row" key={event.id}>
-                  <span
-                    className={`event-detail-icon event-detail-icon--${event.kind}`}
+              {events.items.map((event) => {
+                const email = event.accountId ? emailIn(event.detail) : null;
+                return (
+                  <div
+                    className={`event-detail-row event-detail-row--${event.level}`}
+                    key={event.id}
                   >
-                    {eventIcon(event.kind)}
-                  </span>
-                  <div className="event-detail-row__main">
-                    <strong>{event.title}</strong>
-                    <span>{event.detail}</span>
-                    <span className="event-kind">
-                      {eventLabels[event.kind]}
+                    <span
+                      className={`event-detail-icon event-detail-icon--${event.level}`}
+                    >
+                      {event.level === "error" ? (
+                        <AlertCircle size={16} aria-hidden="true" />
+                      ) : event.level === "warning" ? (
+                        <AlertTriangle size={16} aria-hidden="true" />
+                      ) : (
+                        eventIcon(event.kind)
+                      )}
                     </span>
+                    <div className="event-detail-row__main">
+                      <strong>{event.title}</strong>
+                      <span>{event.detail}</span>
+                      <div className="event-links">
+                        <span className="event-kind">
+                          {eventLabels[event.kind] ?? event.kind}
+                        </span>
+                        {event.campaignId ? (
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => onOpenCampaign(event.campaignId!)}
+                          >
+                            Рассылка <ArrowRight size={13} aria-hidden="true" />
+                          </button>
+                        ) : null}
+                        {email ? (
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => onOpenAccount(email)}
+                          >
+                            Аккаунт <ArrowRight size={13} aria-hidden="true" />
+                          </button>
+                        ) : null}
+                        {event.entityType === "group" && event.entityId ? (
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => onOpenGroup(event.entityId!)}
+                          >
+                            Группа <ArrowRight size={13} aria-hidden="true" />
+                          </button>
+                        ) : null}
+                        {event.attemptId ? (
+                          <span className="muted-value">
+                            попытка №{event.attemptId}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <time dateTime={event.createdAt}>
+                      {formatDateTime(event.createdAt)}
+                    </time>
                   </div>
-                  <time dateTime={event.createdAt}>
-                    {formatDate(event.createdAt)} <small>{timeZone}</small>
-                  </time>
-                  {event.entityId && event.entityType === "campaign" ? (
-                    <button
-                      type="button"
-                      className="text-button text-button--muted"
-                      onClick={() => onOpenCampaign(event.entityId!)}
-                    >
-                      Открыть черновик{" "}
-                      <ArrowRight size={14} aria-hidden="true" />
-                    </button>
-                  ) : null}
-                  {event.entityId && event.entityType === "group" ? (
-                    <button
-                      type="button"
-                      className="text-button text-button--muted"
-                      onClick={() => onOpenGroup(event.entityId!)}
-                    >
-                      Открыть группу <ArrowRight size={14} aria-hidden="true" />
-                    </button>
-                  ) : null}
-                </div>
-              ))}
+                );
+              })}
             </div>
             <Pagination
               page={page}
@@ -1992,9 +2699,9 @@ function EventsPage({
         ) : null}
         {events && !events.items.length ? (
           <EmptyState
-            icon={<Activity size={23} aria-hidden="true" />}
+            icon={<Activity size={22} aria-hidden="true" />}
             title="Событий пока нет"
-            description="После первого действия здесь появится понятная запись с датой и ссылкой."
+            description="Здесь появятся действия оператора, ошибки и решения по задачам."
           />
         ) : null}
       </section>
@@ -2079,7 +2786,7 @@ function GroupModal({
     <Modal
       open={open}
       title="Новая группа аккаунтов"
-      description="Значения лимита применятся к новым аккаунтам группы в M2."
+      description="Значения лимита — умолчания для новой пачки импортируемых аккаунтов; у каждого ящика лимит свой."
       closeDisabled={saving}
       onRequestClose={onRequestClose}
     >
@@ -2206,102 +2913,6 @@ function GroupModal({
   );
 }
 
-function ImportModal({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const [tab, setTab] = useState<"text" | "csv">("text");
-  return (
-    <Modal
-      open={open}
-      title="Импорт почтовых аккаунтов"
-      description="Макет подготовлен заранее; безопасное сохранение доступов появится на этапе M2."
-      onRequestClose={onClose}
-    >
-      <div className="import-tabs" role="tablist" aria-label="Формат импорта">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "text"}
-          className={
-            tab === "text" ? "import-tab import-tab--active" : "import-tab"
-          }
-          onClick={() => setTab("text")}
-        >
-          Вставка строк
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "csv"}
-          className={
-            tab === "csv" ? "import-tab import-tab--active" : "import-tab"
-          }
-          onClick={() => setTab("csv")}
-        >
-          CSV-файл
-        </button>
-      </div>
-      <div className="import-preview">
-        <div className="import-preview__heading">
-          <div>
-            <strong>{tab === "text" ? "Строки аккаунтов" : "Файл CSV"}</strong>
-            <span>
-              {tab === "text"
-                ? "Формат: email | app_password"
-                : "UTF-8, заголовок email,app_password"}
-            </span>
-          </div>
-          <span className="locked-label">
-            <ShieldCheck size={14} aria-hidden="true" />
-            M2
-          </span>
-        </div>
-        {tab === "text" ? (
-          <textarea
-            disabled
-            placeholder="Ввод паролей отключён до M2. Реальные доступы не принимаются на этом этапе."
-            aria-label="Строки аккаунтов, недоступно в M1"
-          />
-        ) : (
-          <div className="file-dropzone">
-            <UploadCloud size={25} aria-hidden="true" />
-            <strong>Выбор файла будет доступен в M2</strong>
-            <span>Загрузка и разбор CSV пока заблокированы</span>
-          </div>
-        )}
-        <div className="import-safe-note">
-          <LockKeyholeIcon />
-          <span>
-            Пароли не сохраняются в браузере и не могут попасть в этот макет.
-            Сначала будет включено защищённое хранение в БД.
-          </span>
-        </div>
-      </div>
-      <div className="modal-actions">
-        <button
-          type="button"
-          className="button button--ghost"
-          onClick={onClose}
-        >
-          Закрыть
-        </button>
-        <button type="button" className="button button--primary" disabled>
-          <UploadCloud size={16} aria-hidden="true" />
-          Импортировать · M2
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-function LockKeyholeIcon() {
-  return <ShieldCheck size={16} aria-hidden="true" />;
-}
-
 function DraftWizard({
   open,
   mode,
@@ -2318,6 +2929,12 @@ function DraftWizard({
   onStep,
   onNext,
   onSave,
+  campaign,
+  starting,
+  startError,
+  onRecipientsSaved,
+  onStart,
+  onTestSend,
   onRequestClose,
   onCancelClose,
   onConfirmClose,
@@ -2338,23 +2955,32 @@ function DraftWizard({
   onStep: (step: number) => void;
   onNext: () => void;
   onSave: () => void;
+  campaign: Campaign | null;
+  starting: boolean;
+  startError: string | null;
+  onRecipientsSaved: (campaign: Campaign) => void;
+  onStart: () => void;
+  onTestSend: (recipient: string) => void;
   onRequestClose: () => void;
   onCancelClose: () => void;
   onConfirmClose: () => void;
   onRetryLoad: () => void;
 }) {
   const stepNames = ["Параметры", "Получатели", "Текст", "Проверка"];
+  const [testRecipient, setTestRecipient] = useState("");
+  const recipientCount = campaign?.counts.total ?? 0;
+  const readyProblems: string[] = [];
+  if (recipientCount === 0) readyProblems.push("нет получателей");
+  if (!form.subject.trim()) readyProblems.push("пустая тема");
+  if (!form.body.trim()) readyProblems.push("пустой текст");
+  const busy = saving || starting;
   return (
     <Modal
       open={open}
-      title={
-        mode === "create"
-          ? "Новый черновик рассылки"
-          : "Редактирование черновика"
-      }
-      description="Содержимое фиксируется только при запуске на следующих этапах. Сейчас можно сохранять незавершённый черновик."
+      title={mode === "create" ? "Новая рассылка" : "Черновик рассылки"}
+      description="Черновик можно сохранять незавершённым. Тема, текст и получатели фиксируются только при запуске."
       wide
-      closeDisabled={saving}
+      closeDisabled={busy}
       onRequestClose={onRequestClose}
     >
       <div className="wizard-steps" aria-label="Шаги создания рассылки">
@@ -2366,7 +2992,7 @@ function DraftWizard({
               className={`wizard-step${step === number ? " wizard-step--active" : ""}${step > number ? " wizard-step--done" : ""}`}
               key={name}
               onClick={() => number <= step && onStep(number)}
-              disabled={saving || number > step}
+              disabled={busy || number > step}
             >
               <span>
                 {step > number ? (
@@ -2386,7 +3012,7 @@ function DraftWizard({
         <ErrorState message={loadError} onRetry={onRetryLoad} />
       ) : null}
       {!loading && !loadError ? (
-        <fieldset className="form-fieldset" disabled={saving}>
+        <fieldset className="form-fieldset" disabled={busy}>
           <>
             {step === 1 ? (
               <div className="wizard-panel">
@@ -2462,27 +3088,31 @@ function DraftWizard({
                 <div className="form-callout">
                   <Info size={16} aria-hidden="true" />
                   <span>
-                    Лимиты аккаунтов и выбор конкретного отправителя появятся
-                    вместе с импортом доступов в M2.
+                    Отправитель выбирается автоматически из доступных аккаунтов
+                    группы с учётом их лимитов; имя отправителя — только
+                    отображаемое.
                   </span>
                 </div>
               </div>
             ) : null}
             {step === 2 ? (
-              <div className="wizard-panel wizard-panel--centered">
-                <span className="wizard-illustration">
-                  <Users size={27} aria-hidden="true" />
-                </span>
-                <h3>Получатели появятся в M3</h3>
-                <p>
-                  Импорт TXT/CSV и проверка адресов ещё не включены. На этом
-                  шаге можно продолжить без получателей и сохранить черновик.
-                </p>
-                <span className="feature-placeholder">
-                  <Clock3 size={15} aria-hidden="true" />
-                  Этот шаг — честная заглушка, без фиктивной очереди
-                </span>
-              </div>
+              campaign ? (
+                <RecipientsEditor
+                  campaign={campaign}
+                  disabled={busy}
+                  onSaved={onRecipientsSaved}
+                />
+              ) : (
+                <div className="wizard-panel wizard-panel--centered">
+                  <span className="wizard-illustration">
+                    <Users size={27} aria-hidden="true" />
+                  </span>
+                  <h3>Сначала сохраните параметры</h3>
+                  <p>
+                    Список получателей привязывается к сохранённому черновику.
+                  </p>
+                </div>
+              )
             ) : null}
             {step === 3 ? (
               <div className="wizard-panel">
@@ -2491,8 +3121,8 @@ function DraftWizard({
                   <div>
                     <h3>Текст письма</h3>
                     <p>
-                      Обычный текст без HTML-конструктора. Тему и тело можно
-                      оставить незавершёнными.
+                      Обычный текст без HTML-конструктора. Для запуска нужны и
+                      тема, и текст.
                     </p>
                   </div>
                 </div>
@@ -2522,8 +3152,8 @@ function DraftWizard({
                 <div className="form-callout">
                   <FileText size={16} aria-hidden="true" />
                   <span>
-                    Дальнейшее изменение содержания будет отдельной версией
-                    рассылки после запуска. Сейчас это только черновик.
+                    После запуска тема и текст зафиксированы; другое содержание
+                    — это новая рассылка.
                   </span>
                 </div>
               </div>
@@ -2533,10 +3163,10 @@ function DraftWizard({
                 <div className="wizard-intro">
                   <span className="wizard-panel__number">04</span>
                   <div>
-                    <h3>Проверка перед сохранением</h3>
+                    <h3>Проверка перед запуском</h3>
                     <p>
-                      Проверьте поля. Сохранение не отправляет письма и не
-                      создаёт задачи.
+                      Сохранение не отправляет письма. Запуск фиксирует тему,
+                      текст и список и передаёт задачи процессу отправки.
                     </p>
                   </div>
                 </div>
@@ -2556,11 +3186,14 @@ function DraftWizard({
                   />
                   <ReviewRow
                     label="Имя отправителя"
-                    value={form.senderName || "Не задано"}
+                    value={
+                      form.senderName || "Не задано (только адрес аккаунта)"
+                    }
                   />
                   <ReviewRow
                     label="Тема"
                     value={form.subject || "Пока без темы"}
+                    missing={!form.subject.trim()}
                   />
                   <ReviewRow
                     label="Текст"
@@ -2569,23 +3202,65 @@ function DraftWizard({
                         ? `${form.body.length} симв.`
                         : "Пока без текста"
                     }
+                    missing={!form.body.trim()}
                   />
                   <ReviewRow
                     label="Получатели"
-                    value="Будут доступны в M3"
-                    state="unavailable"
+                    value={
+                      recipientCount
+                        ? `${recipientCount} ${plural(recipientCount, "адрес", "адреса", "адресов")}`
+                        : "Список пуст"
+                    }
+                    missing={recipientCount === 0}
                   />
                 </div>
-                <div className="launch-disabled">
-                  <ShieldCheck size={17} aria-hidden="true" />
+                <div className="test-send">
                   <div>
-                    <strong>Запуск отключён</strong>
+                    <strong>Тестовая отправка</strong>
                     <span>
-                      В M1 нет отправителя, очереди и тестовой отправки. Эта
-                      кнопка не обещает несуществующий успех.
+                      Одно письмо на явно указанный адрес через ту же очередь и
+                      квоту. Учитывается в истории и лимите аккаунта.
                     </span>
                   </div>
+                  <div className="test-send__row">
+                    <input
+                      type="email"
+                      value={testRecipient}
+                      onChange={(event) => setTestRecipient(event.target.value)}
+                      placeholder="test@example.com"
+                      aria-label="Адрес для тестового письма"
+                    />
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      disabled={
+                        busy ||
+                        !testRecipient.includes("@") ||
+                        !form.subject.trim() ||
+                        !form.body.trim()
+                      }
+                      onClick={() => onTestSend(testRecipient.trim())}
+                    >
+                      <Send size={15} aria-hidden="true" />
+                      Отправить тест
+                    </button>
+                  </div>
                 </div>
+                {readyProblems.length ? (
+                  <div className="launch-disabled">
+                    <ShieldCheck size={17} aria-hidden="true" />
+                    <div>
+                      <strong>Запуск пока недоступен</strong>
+                      <span>Причины: {readyProblems.join(", ")}.</span>
+                    </div>
+                  </div>
+                ) : null}
+                {startError ? (
+                  <div className="submit-error" role="alert">
+                    <AlertTriangle size={16} aria-hidden="true" />
+                    <span>{startError}</span>
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {closePrompt ? (
@@ -2622,15 +3297,8 @@ function DraftWizard({
                   <button
                     type="button"
                     className="button button--secondary"
-                    disabled
-                  >
-                    <Send size={16} aria-hidden="true" />
-                    Запустить · M3
-                  </button>
-                  <button
-                    type="button"
-                    className="button button--primary"
                     onClick={onSave}
+                    disabled={busy}
                   >
                     {saving ? (
                       <>
@@ -2643,6 +3311,15 @@ function DraftWizard({
                         Сохранить черновик
                       </>
                     )}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    onClick={onStart}
+                    disabled={busy || readyProblems.length > 0}
+                  >
+                    <Send size={16} aria-hidden="true" />
+                    Запустить
                   </button>
                 </div>
               )}
@@ -2763,7 +3440,7 @@ function ReviewRow({
       {missing ? (
         <AlertCircle size={15} aria-label="Поле обязательно" />
       ) : state === "unavailable" ? (
-        <Clock3 size={15} aria-label="Недоступно в M1" />
+        <Clock3 size={15} aria-label="Недоступно" />
       ) : (
         <CheckCircle2 size={15} aria-hidden="true" />
       )}

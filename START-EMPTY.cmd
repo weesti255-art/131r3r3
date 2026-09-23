@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0mailcontrol"
-call START-EMPTY.cmd
+call START-EMPTY.cmd %*

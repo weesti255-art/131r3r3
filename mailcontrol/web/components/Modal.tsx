@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
 
@@ -10,6 +11,19 @@ interface ModalProps {
   closeDisabled?: boolean;
   onRequestClose: () => void;
   children: ReactNode;
+}
+
+// Stacked dialogs (wizard + confirmation) share one counter so the page is
+// released only when the last one closes.
+let openModals = 0;
+function setBackgroundInert(inert: boolean) {
+  document
+    .querySelectorAll<HTMLElement>(".sidebar, .app-main")
+    .forEach((element) => {
+      element.inert = inert;
+      if (inert) element.setAttribute("inert", "");
+      else element.removeAttribute("inert");
+    });
 }
 
 export default function Modal({
@@ -51,17 +65,8 @@ export default function Modal({
 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const backgroundElements = Array.from(
-      document.querySelectorAll<HTMLElement>(".sidebar, .app-main")
-    );
-    const previousInert = backgroundElements.map((element) => ({
-      element,
-      inert: element.inert,
-    }));
-    backgroundElements.forEach((element) => {
-      element.inert = true;
-      element.setAttribute("inert", "");
-    });
+    openModals += 1;
+    setBackgroundInert(true);
 
     const focusableSelector =
       "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex='-1'])";
@@ -134,17 +139,15 @@ export default function Modal({
       document.removeEventListener("keydown", handleKeyDown);
       dialogObserver.disconnect();
       document.body.style.overflow = previousOverflow;
-      previousInert.forEach(({ element, inert }) => {
-        element.inert = inert;
-        if (inert) element.setAttribute("inert", "");
-        else element.removeAttribute("inert");
-      });
+      openModals = Math.max(0, openModals - 1);
+      if (openModals === 0) setBackgroundInert(false);
     };
   }, [open]);
 
   if (!open) return null;
 
-  return (
+  // Portal: dialogs opened from inside pages must not sit in the inert region.
+  return createPortal(
     <div className="modal-layer" role="presentation">
       <button
         type="button"
@@ -184,6 +187,7 @@ export default function Modal({
         </div>
         <div className="modal-content">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

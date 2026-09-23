@@ -120,7 +120,6 @@ describe("M1 validation", () => {
         pageSize: 25,
         q: "поиск",
         status: "all",
-        kind: "all",
       }
     );
     assert.throws(() => listSchema.parse({ page: "0" }));

@@ -56,14 +56,27 @@ export async function seedDemo(client: PoolClient) {
   ];
   for (let index = 0; index < 12; index++) {
     const group = groups[index < 6 ? 0 : index < 10 ? 1 : 2];
+    const status = statuses[index];
     await client.query(
-      `INSERT INTO accounts(id, email, group_id, health_status, limit_count, period_hours, is_demo)
-       VALUES ($1, $2, $3, $4, $5, $6, true)`,
+      `INSERT INTO accounts(id, email, group_id, connection_status, manual_disabled, disabled_at, disabled_reason,
+                            connection_error, limit_count, period_hours, is_demo)
+       VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 THEN now() END, CASE WHEN $5 THEN 'Отключён вручную (демонстрация)' END,
+               $6, $7, $8, true)`,
       [
         `b1000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
         `demo.sender${String(index + 1).padStart(2, "0")}@${domains[index % domains.length]}`,
         group.id,
-        statuses[index],
+        status === "active"
+          ? "ok"
+          : status === "disabled"
+            ? "unverified"
+            : status,
+        status === "disabled",
+        status === "auth_error"
+          ? "Демонстрация: неверный пароль приложения"
+          : status === "needs_check"
+            ? "Демонстрация: Mail требует подтверждения владельца"
+            : null,
         group.limit,
         group.hours,
       ]
@@ -73,7 +86,7 @@ export async function seedDemo(client: PoolClient) {
     {
       name: "Знакомство с MailControl",
       subject: "Рады знакомству!",
-      body: "Здравствуйте!\n\nСпасибо, что присоединились к нашему проекту. Здесь будет ваше обращение к получателям.\n\nЭто демонстрационный черновик. В M1 письма не отправляются.",
+      body: "Здравствуйте!\n\nСпасибо, что присоединились к нашему проекту. Здесь будет ваше обращение к получателям.\n\nЭто демонстрационный черновик. В деморежиме письма проходят через тестовый отправитель и не уходят в интернет.",
       group: 0,
       senderName: "Команда проекта",
     },
@@ -109,8 +122,8 @@ export async function seedDemo(client: PoolClient) {
       ]
     );
     await client.query(
-      `INSERT INTO events(kind, title, detail, entity_type, entity_id, created_at)
-       VALUES ('draft_created', 'Добавлен демонстрационный черновик', $1, 'campaign', $2,
+      `INSERT INTO events(kind, title, detail, entity_type, entity_id, campaign_id, created_at)
+       VALUES ('draft_created', 'Добавлен демонстрационный черновик', $1, 'campaign', $2, $2,
                now() - ($3 * interval '1 hour'))`,
       [draft.name, id, index + 1]
     );
@@ -118,6 +131,6 @@ export async function seedDemo(client: PoolClient) {
   await client.query(
     `INSERT INTO events(kind, title, detail, entity_type)
      VALUES ('demo_seeded', 'Демонстрационный режим готов',
-             '3 группы, 12 примеров аккаунтов и 3 черновика. Подключения к Mail нет.', 'system')`
+             '3 группы, 12 примеров аккаунтов без паролей и 3 черновика. Отправка идёт через тестовый отправитель, подключения к Mail нет.', 'system')`
   );
 }

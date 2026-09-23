@@ -22,6 +22,22 @@ export function createPool(config: PoolConfig) {
   return pool;
 }
 
+/** Docker starts the database first, but authentication may still be settling. */
+export async function waitForDatabase(pool: pg.Pool, attempts = 20) {
+  for (let index = 1; ; index++) {
+    try {
+      await pool.query("SELECT 1");
+      return;
+    } catch (error) {
+      if (index >= attempts) throw error;
+      console.error(
+        `[mailcontrol] database not ready (${(error as { code?: string }).code ?? "error"}), retry ${index}/${attempts}`
+      );
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
+}
+
 export async function transaction<T>(
   pool: pg.Pool,
   action: (client: PoolClient) => Promise<T>

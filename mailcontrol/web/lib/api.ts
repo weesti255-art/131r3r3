@@ -1,5 +1,12 @@
 import type {
   Account,
+  AccountCheckResult,
+  AccountImportPreview,
+  AccountImportRequest,
+  AccountImportResult,
+  Attempt,
+  BulkAccountRequest,
+  BulkAccountResult,
   Campaign,
   CampaignSummary,
   CreateDraft,
@@ -7,9 +14,16 @@ import type {
   Event,
   Group,
   Health,
+  ImportFormat,
   Overview,
   Page,
+  RecipientsPreview,
+  RecipientsRequest,
+  RecipientsResult,
+  Settings,
+  Task,
   UpdateDraft,
+  UpdateSettings,
 } from "../../shared/contracts";
 
 export class ApiRequestError extends Error {
@@ -183,8 +197,19 @@ export function createRequestKey(): string {
 export const api = {
   health: () => requestJson<Health>("/api/health"),
 
-  overview: (options: RequestOptions = {}) =>
-    requestJson<Overview>("/api/overview", { signal: options.signal }),
+  overview: (since: string, options: RequestOptions = {}) =>
+    requestJson<Overview>(`/api/overview${query({ since })}`, {
+      signal: options.signal,
+    }),
+
+  settings: (options: RequestOptions = {}) =>
+    requestJson<Settings>("/api/settings", { signal: options.signal }),
+
+  updateSettings: (body: UpdateSettings) =>
+    requestJson<Settings>("/api/settings", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   groups: (
     params: { page?: number; pageSize?: number; q?: string } = {},
@@ -214,8 +239,38 @@ export const api = {
       signal: options.signal,
     }),
 
+  previewAccountImport: (text: string, format: ImportFormat) =>
+    requestJson<AccountImportPreview>("/api/accounts/import/preview", {
+      method: "POST",
+      body: JSON.stringify({ text, format }),
+    }),
+
+  importAccounts: (body: AccountImportRequest) =>
+    requestJson<AccountImportResult>("/api/accounts/import", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  bulkAccounts: (body: BulkAccountRequest) =>
+    requestJson<BulkAccountResult>("/api/accounts/bulk", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  checkAccount: (id: string, requestKey: string) =>
+    requestJson<AccountCheckResult>(
+      `/api/accounts/${encodeURIComponent(id)}/check`,
+      { method: "POST", body: JSON.stringify({ requestKey }) }
+    ),
+
   campaigns: (
-    params: { page?: number; pageSize?: number; q?: string } = {},
+    params: {
+      page?: number;
+      pageSize?: number;
+      q?: string;
+      status?: string;
+      groupId?: string;
+    } = {},
     options: RequestOptions = {}
   ) =>
     requestJson<Page<CampaignSummary>>(`/api/campaigns${query(params)}`, {
@@ -239,11 +294,86 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  previewRecipients: (id: string, text: string, format: ImportFormat) =>
+    requestJson<RecipientsPreview>(
+      `/api/campaigns/${encodeURIComponent(id)}/recipients/preview`,
+      { method: "POST", body: JSON.stringify({ text, format }) }
+    ),
+
+  setRecipients: (id: string, body: RecipientsRequest) =>
+    requestJson<RecipientsResult>(
+      `/api/campaigns/${encodeURIComponent(id)}/recipients`,
+      { method: "PUT", body: JSON.stringify(body) }
+    ),
+
+  campaignAction: (
+    id: string,
+    action: "start" | "pause" | "resume" | "stop",
+    requestKey: string
+  ) =>
+    requestJson<Campaign>(
+      `/api/campaigns/${encodeURIComponent(id)}/${action}`,
+      { method: "POST", body: JSON.stringify({ requestKey }) }
+    ),
+
+  testSend: (id: string, recipient: string, requestKey: string) =>
+    requestJson<Campaign>(
+      `/api/campaigns/${encodeURIComponent(id)}/test-send`,
+      { method: "POST", body: JSON.stringify({ recipient, requestKey }) }
+    ),
+
+  tasks: (
+    id: string,
+    params: {
+      page?: number;
+      pageSize?: number;
+      status?: string;
+      q?: string;
+    } = {},
+    options: RequestOptions = {}
+  ) =>
+    requestJson<Page<Task>>(
+      `/api/campaigns/${encodeURIComponent(id)}/tasks${query(params)}`,
+      { signal: options.signal }
+    ),
+
+  attempts: (id: string, taskId: string, options: RequestOptions = {}) =>
+    requestJson<Attempt[]>(
+      `/api/campaigns/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/attempts`,
+      { signal: options.signal }
+    ),
+
+  attempt: (id: string, options: RequestOptions = {}) =>
+    requestJson<Attempt>(`/api/attempts/${encodeURIComponent(id)}`, {
+      signal: options.signal,
+    }),
+
+  excludeTask: (id: string, taskId: string, requestKey: string) =>
+    requestJson<Task>(
+      `/api/campaigns/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/exclude`,
+      { method: "POST", body: JSON.stringify({ requestKey }) }
+    ),
+
+  resolveTask: (
+    id: string,
+    taskId: string,
+    decision: "accepted" | "failed" | "closed",
+    requestKey: string
+  ) =>
+    requestJson<Task>(
+      `/api/campaigns/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/resolve`,
+      { method: "POST", body: JSON.stringify({ decision, requestKey }) }
+    ),
+
   events: (
     params: {
       page?: number;
       pageSize?: number;
       kind?: string;
+      level?: string;
+      q?: string;
+      campaignId?: string;
+      accountId?: string;
     } = {},
     options: RequestOptions = {}
   ) =>
@@ -251,6 +381,14 @@ export const api = {
       signal: options.signal,
     }),
 };
+
+export function reportUrl(campaignId: string) {
+  return `/api/campaigns/${encodeURIComponent(campaignId)}/report.csv`;
+}
+
+export function templateUrl(format: ImportFormat) {
+  return `/api/accounts/import/template?format=${format}`;
+}
 
 export function isRequestAborted(error: unknown): boolean {
   return error instanceof ApiRequestError && error.code === "request_aborted";
