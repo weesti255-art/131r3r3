@@ -51,7 +51,11 @@ export async function reserveNext(
   const settings = await loadSettingsRow(pool);
   return transaction(pool, async (client) => {
     const now = clock.now();
-    const task = await client.query<{ id: string; email: string; attempt_count: number }>(
+    const task = await client.query<{
+      id: string;
+      email: string;
+      attempt_count: number;
+    }>(
       `SELECT t.id::text, t.email, t.attempt_count FROM tasks t
        WHERE t.campaign_id = $1 AND t.status = 'pending' AND t.next_attempt_at <= $2
        ORDER BY t.position, t.id LIMIT 1 FOR UPDATE SKIP LOCKED`,
@@ -97,17 +101,36 @@ export async function beginAttempt(
       subject: string;
       body: string;
       sender_name: string;
-    }>("SELECT status, group_id, subject, body, sender_name FROM campaigns WHERE id = $1 FOR UPDATE", [reservation.campaignId]);
-    const state = campaign.rows[0];
-    const task = await client.query<{ status: string; owner_token: string | null }>(
-      "SELECT status, owner_token FROM tasks WHERE id = $1 FOR UPDATE",
-      [reservation.taskId]
+    }>(
+      "SELECT status, group_id, subject, body, sender_name FROM campaigns WHERE id = $1 FOR UPDATE",
+      [reservation.campaignId]
     );
-    if (!task.rows[0] || task.rows[0].status !== "reserved" || task.rows[0].owner_token !== reservation.ownerToken)
-      return { kind: "released", reason: "Резерв задачи больше не принадлежит этому процессу" };
+    const state = campaign.rows[0];
+    const task = await client.query<{
+      status: string;
+      owner_token: string | null;
+    }>("SELECT status, owner_token FROM tasks WHERE id = $1 FOR UPDATE", [
+      reservation.taskId,
+    ]);
+    if (
+      !task.rows[0] ||
+      task.rows[0].status !== "reserved" ||
+      task.rows[0].owner_token !== reservation.ownerToken
+    )
+      return {
+        kind: "released",
+        reason: "Резерв задачи больше не принадлежит этому процессу",
+      };
     if (!state || state.status !== "running") {
-      await releaseReservation(client, reservation, state?.status === "stopped" ? "cancelled" : "pending");
-      return { kind: "released", reason: `Рассылка в состоянии «${state?.status ?? "удалена"}»` };
+      await releaseReservation(
+        client,
+        reservation,
+        state?.status === "stopped" ? "cancelled" : "pending"
+      );
+      return {
+        kind: "released",
+        reason: `Рассылка в состоянии «${state?.status ?? "удалена"}»`,
+      };
     }
     const candidate = await client.query<CandidateRow>(
       `SELECT a.id, a.email FROM accounts a
@@ -136,7 +159,15 @@ export async function beginAttempt(
     const attempt = await client.query<{ id: string }>(
       `INSERT INTO attempts(task_id, campaign_id, account_id, number, worker_id, owner_token, started_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id::text`,
-      [reservation.taskId, reservation.campaignId, account.id, reservation.attemptNumber, workerId, reservation.ownerToken, now]
+      [
+        reservation.taskId,
+        reservation.campaignId,
+        account.id,
+        reservation.attemptNumber,
+        workerId,
+        reservation.ownerToken,
+        now,
+      ]
     );
     const usage = await client.query<{ id: string }>(
       `INSERT INTO quota_usage(account_id, task_id, attempt_id, state, occupied_at)
@@ -148,8 +179,14 @@ export async function beginAttempt(
               reserved_until = NULL WHERE id = $1`,
       [reservation.taskId, account.id, reservation.attemptNumber]
     );
-    await client.query("UPDATE accounts SET last_used_at = $2 WHERE id = $1", [account.id, now]);
-    await client.query("UPDATE campaigns SET wait_reason = NULL, wait_until = NULL WHERE id = $1 AND wait_reason IS NOT NULL", [reservation.campaignId]);
+    await client.query("UPDATE accounts SET last_used_at = $2 WHERE id = $1", [
+      account.id,
+      now,
+    ]);
+    await client.query(
+      "UPDATE campaigns SET wait_reason = NULL, wait_until = NULL WHERE id = $1 AND wait_reason IS NOT NULL",
+      [reservation.campaignId]
+    );
     return {
       kind: "started",
       attempt: {
@@ -166,7 +203,11 @@ export async function beginAttempt(
   });
 }
 
-async function releaseReservation(client: PoolClient, reservation: Reservation, status: "pending" | "cancelled") {
+async function releaseReservation(
+  client: PoolClient,
+  reservation: Reservation,
+  status: "pending" | "cancelled"
+) {
   await client.query(
     `UPDATE tasks SET status = $2, owner_worker_id = NULL, owner_token = NULL, reserved_until = NULL,
             finished_at = CASE WHEN $2 = 'cancelled' THEN now() ELSE finished_at END, updated_at = now()
@@ -200,7 +241,11 @@ async function describeWait(client: PoolClient, groupId: string, now: Date) {
     [groupId, now]
   );
   const row = summary.rows[0];
-  if (row.total === 0) return { reason: "В группе нет аккаунтов — добавьте отправителей", until: null };
+  if (row.total === 0)
+    return {
+      reason: "В группе нет аккаунтов — добавьте отправителей",
+      until: null,
+    };
   const usable = row.total - row.disabled - row.broken;
   if (usable <= 0)
     return {
@@ -208,7 +253,10 @@ async function describeWait(client: PoolClient, groupId: string, now: Date) {
       until: null,
     };
   if (row.busy > 0 && row.exhausted + row.cooling < usable)
-    return { reason: "Все доступные аккаунты сейчас заняты отправкой", until: new Date(now.getTime() + 2000) };
+    return {
+      reason: "Все доступные аккаунты сейчас заняты отправкой",
+      until: new Date(now.getTime() + 2000),
+    };
   const until = row.next_free ? new Date(row.next_free) : null;
   return {
     reason: `Лимиты исчерпаны у ${row.exhausted} из ${usable} доступных аккаунтов${row.cooling ? `, временная ошибка у ${row.cooling}` : ""}; продолжение не раньше ${until ? until.toISOString() : "освобождения квоты"}`,
@@ -233,13 +281,20 @@ export interface FinishInput {
  * Records the adapter result. If the operator already decided the outcome of an
  * unclear task, the late answer is stored on the same attempt and changes nothing.
  */
-export async function finishAttempt(pool: Pool, input: FinishInput): Promise<string> {
+export async function finishAttempt(
+  pool: Pool,
+  input: FinishInput
+): Promise<string> {
   const { attempt, outcome } = input;
   return transaction(pool, async (client) => {
     const now = clock.now();
     const settings = await loadSettingsRow(client);
-    await client.query("SELECT 1 FROM campaigns WHERE id = $1 FOR UPDATE", [attempt.campaignId]);
-    await client.query("SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE", [attempt.taskId]);
+    await client.query("SELECT 1 FROM campaigns WHERE id = $1 FOR UPDATE", [
+      attempt.campaignId,
+    ]);
+    await client.query("SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE", [
+      attempt.taskId,
+    ]);
     const current = await client.query<{
       decided: boolean;
       task_status: string;
@@ -257,7 +312,12 @@ export async function finishAttempt(pool: Pool, input: FinishInput): Promise<str
     if (row.decided) {
       await client.query(
         "UPDATE attempts SET late_outcome = $2, late_message = $3, late_at = $4 WHERE id = $1",
-        [attempt.attemptId, outcome.kind, "message" in outcome ? outcome.message : outcome.response, now]
+        [
+          attempt.attemptId,
+          outcome.kind,
+          "message" in outcome ? outcome.message : outcome.response,
+          now,
+        ]
       );
       await recordEvent(client, {
         kind: "late_response",
@@ -282,7 +342,10 @@ export async function finishAttempt(pool: Pool, input: FinishInput): Promise<str
         [attempt.attemptId, now, result, category, code, message]
       );
     const setUsage = (state: "accepted" | "released" | "reserved") =>
-      client.query("UPDATE quota_usage SET state = $2 WHERE id = $1", [attempt.quotaUsageId, state]);
+      client.query("UPDATE quota_usage SET state = $2 WHERE id = $1", [
+        attempt.quotaUsageId,
+        state,
+      ]);
 
     if (outcome.kind === "accepted") {
       await setAttempt("accepted", null, null, null);
@@ -319,7 +382,12 @@ export async function finishAttempt(pool: Pool, input: FinishInput): Promise<str
       });
       return "unclear";
     }
-    await setAttempt("rejected", outcome.category, outcome.code, outcome.message);
+    await setAttempt(
+      "rejected",
+      outcome.category,
+      outcome.code,
+      outcome.message
+    );
     await setUsage("released");
     const budgetLeft = row.attempt_count < 1 + settings.retry_max_attempts;
     const failTask = async (detail: string) => {
@@ -353,7 +421,12 @@ export async function finishAttempt(pool: Pool, input: FinishInput): Promise<str
       case "auth":
       case "needs_check":
       case "account_blocked": {
-        const status = outcome.category === "auth" ? "auth_error" : outcome.category === "needs_check" ? "needs_check" : "blocked";
+        const status =
+          outcome.category === "auth"
+            ? "auth_error"
+            : outcome.category === "needs_check"
+              ? "needs_check"
+              : "blocked";
         await client.query(
           `UPDATE accounts SET connection_status = $2, connection_error = $3, connection_checked_at = $4, updated_at = now() WHERE id = $1`,
           [attempt.accountId, status, outcome.message.slice(0, 500), now]
@@ -373,8 +446,15 @@ export async function finishAttempt(pool: Pool, input: FinishInput): Promise<str
           taskId: attempt.taskId,
           attemptId: attempt.attemptId,
         });
-        if (budgetLeft) await requeue(now, `Аккаунт ${attempt.accountEmail} исключён (${outcome.message}); задача переходит другому аккаунту`);
-        else await failTask(`Исчерпан бюджет попыток; последняя ошибка аккаунта ${attempt.accountEmail}: ${outcome.message}`);
+        if (budgetLeft)
+          await requeue(
+            now,
+            `Аккаунт ${attempt.accountEmail} исключён (${outcome.message}); задача переходит другому аккаунту`
+          );
+        else
+          await failTask(
+            `Исчерпан бюджет попыток; последняя ошибка аккаунта ${attempt.accountEmail}: ${outcome.message}`
+          );
         break;
       }
       case "content_or_policy":
@@ -382,7 +462,10 @@ export async function finishAttempt(pool: Pool, input: FinishInput): Promise<str
         if (row.campaign_status === "running") {
           await client.query(
             `UPDATE campaigns SET status = 'paused', pause_reason = $2, wait_reason = NULL, wait_until = NULL, updated_at = now() WHERE id = $1`,
-            [attempt.campaignId, `Отказ сервиса по содержанию или запрет рассылки (${attempt.accountEmail}): ${outcome.message.slice(0, 300)}`]
+            [
+              attempt.campaignId,
+              `Отказ сервиса по содержанию или запрет рассылки (${attempt.accountEmail}): ${outcome.message.slice(0, 300)}`,
+            ]
           );
           await recordEvent(client, {
             kind: "campaign_auto_paused",
@@ -402,11 +485,20 @@ export async function finishAttempt(pool: Pool, input: FinishInput): Promise<str
         if (outcome.scope !== "message") {
           await client.query(
             `UPDATE accounts SET connection_status = 'temporary_error', connection_error = $2, cooldown_until = $3, updated_at = now() WHERE id = $1`,
-            [attempt.accountId, outcome.message.slice(0, 500), new Date(Math.min(now.getTime() + delay, now.getTime() + 15 * 60000))]
+            [
+              attempt.accountId,
+              outcome.message.slice(0, 500),
+              new Date(
+                Math.min(now.getTime() + delay, now.getTime() + 15 * 60000)
+              ),
+            ]
           );
         }
         if (budgetLeft) {
-          await requeue(new Date(now.getTime() + delay), `Временная ошибка, повтор запланирован: ${outcome.message}`);
+          await requeue(
+            new Date(now.getTime() + delay),
+            `Временная ошибка, повтор запланирован: ${outcome.message}`
+          );
           await recordEvent(client, {
             kind: "attempt_failed",
             level: "warning",
@@ -417,7 +509,10 @@ export async function finishAttempt(pool: Pool, input: FinishInput): Promise<str
             taskId: attempt.taskId,
             attemptId: attempt.attemptId,
           });
-        } else await failTask(`Исчерпан предел попыток (${row.attempt_count}); последняя ошибка: ${outcome.message}`);
+        } else
+          await failTask(
+            `Исчерпан предел попыток (${row.attempt_count}); последняя ошибка: ${outcome.message}`
+          );
       }
     }
     await finishCampaignIfDone(client, attempt.campaignId, now);
@@ -425,8 +520,16 @@ export async function finishAttempt(pool: Pool, input: FinishInput): Promise<str
   });
 }
 
-export async function finishCampaignIfDone(client: PoolClient, campaignId: string, now: Date) {
-  const remaining = await client.query<{ active: number; failed: number; status: string }>(
+export async function finishCampaignIfDone(
+  client: PoolClient,
+  campaignId: string,
+  now: Date
+) {
+  const remaining = await client.query<{
+    active: number;
+    failed: number;
+    status: string;
+  }>(
     `SELECT (SELECT count(*)::int FROM tasks t WHERE t.campaign_id = c.id AND t.status = ANY($2::text[])) AS active,
             (SELECT count(*)::int FROM tasks t WHERE t.campaign_id = c.id AND t.status IN ('failed', 'closed_unconfirmed')) AS failed,
             c.status
@@ -444,8 +547,12 @@ export async function finishCampaignIfDone(client: PoolClient, campaignId: strin
     await recordEvent(client, {
       kind: "campaign_completed",
       level: row.failed > 0 ? "warning" : "info",
-      title: row.failed > 0 ? "Рассылка завершена с ошибками" : "Рассылка завершена",
-      detail: row.failed > 0 ? `Задач с ошибкой или закрытых без подтверждения: ${row.failed}.` : "Все задачи получили итог.",
+      title:
+        row.failed > 0 ? "Рассылка завершена с ошибками" : "Рассылка завершена",
+      detail:
+        row.failed > 0
+          ? `Задач с ошибкой или закрытых без подтверждения: ${row.failed}.`
+          : "Все задачи получили итог.",
       campaignId,
     });
     return true;
@@ -468,7 +575,14 @@ export async function recoverStale(pool: Pool, aliveWorkerIds: string[]) {
        RETURNING id::text`,
       [now, aliveWorkerIds]
     );
-    const stale = await client.query<{ id: string; task_id: string; campaign_id: string; account_id: string; email: string; account_email: string }>(
+    const stale = await client.query<{
+      id: string;
+      task_id: string;
+      campaign_id: string;
+      account_id: string;
+      email: string;
+      account_email: string;
+    }>(
       `SELECT p.id::text, p.task_id::text, p.campaign_id, p.account_id, t.email, a.email AS account_email
        FROM attempts p JOIN tasks t ON t.id = p.task_id JOIN accounts a ON a.id = p.account_id
        LEFT JOIN workers w ON w.id = p.worker_id
@@ -479,7 +593,8 @@ export async function recoverStale(pool: Pool, aliveWorkerIds: string[]) {
       [now, settings.heartbeat_stale_seconds, aliveWorkerIds]
     );
     for (const row of stale.rows) {
-      const message = "Процесс отправки прервался после начала передачи письма; результат неизвестен";
+      const message =
+        "Процесс отправки прервался после начала передачи письма; результат неизвестен";
       await client.query(
         "UPDATE attempts SET finished_at = $2, outcome = 'unknown', error_message = $3 WHERE id = $1",
         [row.id, now, message]

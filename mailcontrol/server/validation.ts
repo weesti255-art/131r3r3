@@ -35,12 +35,16 @@ export const draftFields = {
     .refine((value) => !/[\r\n]/.test(value), "Имя должно быть одной строкой")
     .default(""),
 };
-export const createDraftSchema = z.object({ ...draftFields, requestKey }).strict();
+export const createDraftSchema = z
+  .object({ ...draftFields, requestKey })
+  .strict();
 export const updateDraftSchema = z
   .object({ ...draftFields, revision: positiveInteger })
   .strict();
 export const idSchema = uuid;
-export const bigIdSchema = z.string().regex(/^\d{1,18}$/, "Некорректный идентификатор");
+export const bigIdSchema = z
+  .string()
+  .regex(/^\d{1,18}$/, "Некорректный идентификатор");
 
 const optionalGroup = z
   .union([uuid, z.literal(""), z.literal("all")])
@@ -128,9 +132,24 @@ export const overviewSchema = z
 export const settingsSchema = z
   .object({
     senderKind: z.enum(["test", "mail"]).optional(),
-    retryMaxAttempts: z.number().int().min(0, "Минимум 0").max(20, "Не более 20").optional(),
-    retryBaseMinutes: z.number().int().min(1, "Минимум 1").max(1440, "Не более 1440").optional(),
-    retryMaxMinutes: z.number().int().min(1, "Минимум 1").max(10080, "Не более 10080").optional(),
+    retryMaxAttempts: z
+      .number()
+      .int()
+      .min(0, "Минимум 0")
+      .max(20, "Не более 20")
+      .optional(),
+    retryBaseMinutes: z
+      .number()
+      .int()
+      .min(1, "Минимум 1")
+      .max(1440, "Не более 1440")
+      .optional(),
+    retryMaxMinutes: z
+      .number()
+      .int()
+      .min(1, "Минимум 1")
+      .max(10080, "Не более 10080")
+      .optional(),
     testSenderDelayMs: z.number().int().min(0).max(60000).optional(),
   })
   .strict();
@@ -151,7 +170,9 @@ export const accountImportSchema = z
   })
   .strict();
 
-export const templateSchema = z.object({ format: importFormat.default("csv") }).strict();
+export const templateSchema = z
+  .object({ format: importFormat.default("csv") })
+  .strict();
 
 const selection = {
   ids: z.array(uuid).max(10000).optional(),
@@ -167,15 +188,27 @@ const selection = {
 };
 export const bulkAccountSchema = z
   .discriminatedUnion("action", [
-    z.object({ action: z.literal("set_limit"), limitCount: positiveInteger, periodHours: positiveInteger.max(8760), ...selection }).strict(),
-    z.object({ action: z.literal("move"), groupId: uuid, ...selection }).strict(),
+    z
+      .object({
+        action: z.literal("set_limit"),
+        limitCount: positiveInteger,
+        periodHours: positiveInteger.max(8760),
+        ...selection,
+      })
+      .strict(),
+    z
+      .object({ action: z.literal("move"), groupId: uuid, ...selection })
+      .strict(),
     z.object({ action: z.literal("disable"), ...selection }).strict(),
     z.object({ action: z.literal("enable"), ...selection }).strict(),
     z.object({ action: z.literal("check"), ...selection }).strict(),
   ])
-  .refine((value) => (value.ids && value.ids.length > 0) !== Boolean(value.filter), {
-    message: "Укажите либо выбранные аккаунты, либо фильтр",
-  });
+  .refine(
+    (value) => (value.ids && value.ids.length > 0) !== Boolean(value.filter),
+    {
+      message: "Укажите либо выбранные аккаунты, либо фильтр",
+    }
+  );
 export type BulkAccountInput = z.infer<typeof bulkAccountSchema>;
 
 export const requestKeySchema = z.object({ requestKey }).strict();
@@ -183,7 +216,10 @@ export const recipientsSchema = z
   .object({ text: importText, format: importFormat, requestKey })
   .strict();
 export const testSendSchema = z
-  .object({ recipient: shortText(254).min(3, "Укажите адрес получателя"), requestKey })
+  .object({
+    recipient: shortText(254).min(3, "Укажите адрес получателя"),
+    requestKey,
+  })
   .strict();
 export const resolveTaskSchema = z
   .object({ decision: z.enum(["accepted", "failed", "closed"]), requestKey })

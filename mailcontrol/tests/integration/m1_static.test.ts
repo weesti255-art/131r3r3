@@ -6,7 +6,7 @@ import path from "node:path";
 import { createApp } from "../../server/app.js";
 import { loadConfig } from "../../server/config.js";
 import { initializeDatabase } from "../../server/database.js";
-import { cleanupTestDatabases, withTestApp } from "./helpers.js";
+import { cleanupTestDatabases, testKeyStore, withTestApp } from "./helpers.js";
 
 after(cleanupTestDatabases);
 
@@ -35,7 +35,8 @@ describe("M1 web distribution", () => {
             webPath,
             archivePath,
           },
-          pool
+          pool,
+          await testKeyStore()
         );
         try {
           for (const url of ["/", "/accounts", "/campaigns", "/events"]) {
@@ -51,7 +52,7 @@ describe("M1 web distribution", () => {
             assert.equal(response.body, html);
           }
           const downloaded = await app.inject({
-            url: "/download/mailcontrol-m1.zip",
+            url: "/download/mailcontrol.zip",
             headers: { host: "localhost:3000" },
           });
           assert.equal(downloaded.statusCode, 200);
@@ -98,7 +99,7 @@ describe("M1 web distribution", () => {
         const count = await pool.query(
           "SELECT count(*)::int AS count FROM schema_migrations"
         );
-        assert.equal(count.rows[0].count, 1);
+        assert.equal(count.rows[0].count, 2);
       });
     } finally {
       await rm(temporary, { recursive: true, force: true });

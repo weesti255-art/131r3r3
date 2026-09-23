@@ -72,8 +72,9 @@ import type { Sender } from "./sender/types.js";
 
 function isWebRoute(pathname: string) {
   return (
-    ["/", "/accounts", "/campaigns", "/events", "/settings"].includes(pathname) ||
-    /^\/campaigns\/[0-9a-f-]{36}$/i.test(pathname)
+    ["/", "/accounts", "/campaigns", "/events", "/settings"].includes(
+      pathname
+    ) || /^\/campaigns\/[0-9a-f-]{36}$/i.test(pathname)
   );
 }
 
@@ -101,7 +102,9 @@ export async function createApp(
     const kind = await effectiveSenderKind();
     if (kind === "mail") return createMailSender(config.smtpOverride);
     const settings = await loadSettingsRow(pool);
-    return createTestSender({ delayMs: () => Math.min(settings.test_sender_delay_ms, 300) });
+    return createTestSender({
+      delayMs: () => Math.min(settings.test_sender_delay_ms, 300),
+    });
   }
   const app = fastify({
     logger: false,
@@ -190,7 +193,11 @@ export async function createApp(
         .code(error.status)
         .send({ error: { code: error.code, message: error.message } });
     }
-    const info = error as { code?: string; statusCode?: number; constraint?: string };
+    const info = error as {
+      code?: string;
+      statusCode?: number;
+      constraint?: string;
+    };
     if (info.code === "23505") {
       return reply.code(409).send({
         error: {
@@ -251,26 +258,47 @@ export async function createApp(
   });
   app.get("/api/overview", async (request) => {
     const query = overviewSchema.parse(request.query);
-    const since = query.since ? new Date(query.since) : new Date(new Date().setUTCHours(0, 0, 0, 0));
+    const since = query.since
+      ? new Date(query.since)
+      : new Date(new Date().setUTCHours(0, 0, 0, 0));
     return getOverview(pool, config.mode, since, await effectiveSenderKind());
   });
-  app.get("/api/settings", () => getSettings(pool, config.mode, mailSenderAllowed));
+  app.get("/api/settings", () =>
+    getSettings(pool, config.mode, mailSenderAllowed)
+  );
   app.patch("/api/settings", (request) =>
-    updateSettings(pool, config.mode, mailSenderAllowed, settingsSchema.parse(request.body))
+    updateSettings(
+      pool,
+      config.mode,
+      mailSenderAllowed,
+      settingsSchema.parse(request.body)
+    )
   );
 
-  app.get("/api/groups", (request) => listGroups(pool, listSchema.parse(request.query)));
+  app.get("/api/groups", (request) =>
+    listGroups(pool, listSchema.parse(request.query))
+  );
   app.post("/api/groups", async (request, reply) => {
     const result = await createGroup(pool, groupSchema.parse(request.body));
     return reply.code(result.created ? 201 : 200).send(result.value);
   });
 
-  app.get("/api/accounts", (request) => listAccounts(pool, listSchema.parse(request.query)));
+  app.get("/api/accounts", (request) =>
+    listAccounts(pool, listSchema.parse(request.query))
+  );
   app.get("/api/accounts/import/template", (request, reply) => {
     const { format } = templateSchema.parse(request.query);
     return reply
-      .header("Content-Type", format === "csv" ? "text/csv; charset=utf-8" : "text/plain; charset=utf-8")
-      .header("Content-Disposition", `attachment; filename="mailcontrol-accounts-template.${format === "csv" ? "csv" : "txt"}"`)
+      .header(
+        "Content-Type",
+        format === "csv"
+          ? "text/csv; charset=utf-8"
+          : "text/plain; charset=utf-8"
+      )
+      .header(
+        "Content-Disposition",
+        `attachment; filename="mailcontrol-accounts-template.${format === "csv" ? "csv" : "txt"}"`
+      )
       .send(accountTemplate(format));
   });
   app.post("/api/accounts/import/preview", (request) => {
@@ -283,69 +311,147 @@ export async function createApp(
   app.post("/api/accounts/bulk", async (request) => {
     const input = bulkAccountSchema.parse(request.body);
     const sender = await currentSender();
-    return bulkAccounts(pool, input, (ids) => checkMany(pool, keys, sender, ids));
+    return bulkAccounts(pool, input, (ids) =>
+      checkMany(pool, keys, sender, ids)
+    );
   });
-  app.post<{ Params: { id: string } }>("/api/accounts/:id/check", async (request) => {
-    requestKeySchema.parse(request.body);
-    return checkAccount(pool, keys, await currentSender(), idSchema.parse(request.params.id));
-  });
+  app.post<{ Params: { id: string } }>(
+    "/api/accounts/:id/check",
+    async (request) => {
+      requestKeySchema.parse(request.body);
+      return checkAccount(
+        pool,
+        keys,
+        await currentSender(),
+        idSchema.parse(request.params.id)
+      );
+    }
+  );
 
-  app.get("/api/campaigns", (request) => listCampaigns(pool, listSchema.parse(request.query)));
+  app.get("/api/campaigns", (request) =>
+    listCampaigns(pool, listSchema.parse(request.query))
+  );
   app.post("/api/campaigns", async (request, reply) => {
-    const result = await createCampaign(pool, createDraftSchema.parse(request.body));
+    const result = await createCampaign(
+      pool,
+      createDraftSchema.parse(request.body)
+    );
     return reply.code(result.created ? 201 : 200).send(result.value);
   });
   app.get<{ Params: { id: string } }>("/api/campaigns/:id", (request) =>
     getCampaign(pool, idSchema.parse(request.params.id))
   );
   app.patch<{ Params: { id: string } }>("/api/campaigns/:id", (request) =>
-    updateCampaign(pool, idSchema.parse(request.params.id), updateDraftSchema.parse(request.body))
+    updateCampaign(
+      pool,
+      idSchema.parse(request.params.id),
+      updateDraftSchema.parse(request.body)
+    )
   );
-  app.post<{ Params: { id: string } }>("/api/campaigns/:id/recipients/preview", (request) => {
-    idSchema.parse(request.params.id);
-    const input = importPreviewSchema.parse(request.body);
-    return previewRecipients(input.text, input.format);
-  });
-  app.put<{ Params: { id: string } }>("/api/campaigns/:id/recipients", (request) =>
-    setRecipients(pool, idSchema.parse(request.params.id), recipientsSchema.parse(request.body))
+  app.post<{ Params: { id: string } }>(
+    "/api/campaigns/:id/recipients/preview",
+    (request) => {
+      idSchema.parse(request.params.id);
+      const input = importPreviewSchema.parse(request.body);
+      return previewRecipients(input.text, input.format);
+    }
+  );
+  app.put<{ Params: { id: string } }>(
+    "/api/campaigns/:id/recipients",
+    (request) =>
+      setRecipients(
+        pool,
+        idSchema.parse(request.params.id),
+        recipientsSchema.parse(request.body)
+      )
   );
   app.get<{ Params: { id: string } }>("/api/campaigns/:id/tasks", (request) =>
-    listTasks(pool, idSchema.parse(request.params.id), taskListSchema.parse(request.query))
+    listTasks(
+      pool,
+      idSchema.parse(request.params.id),
+      taskListSchema.parse(request.query)
+    )
   );
-  app.get<{ Params: { id: string; taskId: string } }>("/api/campaigns/:id/tasks/:taskId/attempts", (request) =>
-    listAttempts(pool, idSchema.parse(request.params.id), bigIdSchema.parse(request.params.taskId))
-  );
-  const actions = { start: startCampaign, pause: pauseCampaign, resume: resumeCampaign, stop: stopCampaign };
-  for (const [name, action] of Object.entries(actions)) {
-    app.post<{ Params: { id: string } }>(`/api/campaigns/:id/${name}`, (request) => {
-      requestKeySchema.parse(request.body);
-      return action(pool, idSchema.parse(request.params.id));
-    });
-  }
-  app.post<{ Params: { id: string } }>("/api/campaigns/:id/test-send", (request) => {
-    const input = testSendSchema.parse(request.body);
-    return createTestSend(pool, idSchema.parse(request.params.id), input.recipient, input.requestKey);
-  });
-  app.post<{ Params: { id: string; taskId: string } }>("/api/campaigns/:id/tasks/:taskId/exclude", (request) => {
-    requestKeySchema.parse(request.body);
-    return excludeTask(pool, idSchema.parse(request.params.id), bigIdSchema.parse(request.params.taskId));
-  });
-  app.post<{ Params: { id: string; taskId: string } }>("/api/campaigns/:id/tasks/:taskId/resolve", (request) => {
-    const input = resolveTaskSchema.parse(request.body);
-    return resolveTask(pool, idSchema.parse(request.params.id), bigIdSchema.parse(request.params.taskId), input.decision, input.requestKey);
-  });
-  app.get<{ Params: { id: string } }>("/api/campaigns/:id/report.csv", async (request, reply) => {
-    const report = await campaignReportCsv(pool, idSchema.parse(request.params.id));
-    return reply
-      .header("Content-Type", "text/csv; charset=utf-8")
-      .header(
-        "Content-Disposition",
-        `attachment; filename="mailcontrol-${report.campaign.id.slice(0, 8)}.csv"; filename*=UTF-8''${encodeURIComponent(report.filename)}`
+  app.get<{ Params: { id: string; taskId: string } }>(
+    "/api/campaigns/:id/tasks/:taskId/attempts",
+    (request) =>
+      listAttempts(
+        pool,
+        idSchema.parse(request.params.id),
+        bigIdSchema.parse(request.params.taskId)
       )
-      .send(report.content);
-  });
+  );
+  const actions = {
+    start: startCampaign,
+    pause: pauseCampaign,
+    resume: resumeCampaign,
+    stop: stopCampaign,
+  };
+  for (const [name, action] of Object.entries(actions)) {
+    app.post<{ Params: { id: string } }>(
+      `/api/campaigns/:id/${name}`,
+      (request) => {
+        requestKeySchema.parse(request.body);
+        return action(pool, idSchema.parse(request.params.id));
+      }
+    );
+  }
+  app.post<{ Params: { id: string } }>(
+    "/api/campaigns/:id/test-send",
+    (request) => {
+      const input = testSendSchema.parse(request.body);
+      return createTestSend(
+        pool,
+        idSchema.parse(request.params.id),
+        input.recipient,
+        input.requestKey
+      );
+    }
+  );
+  app.post<{ Params: { id: string; taskId: string } }>(
+    "/api/campaigns/:id/tasks/:taskId/exclude",
+    (request) => {
+      requestKeySchema.parse(request.body);
+      return excludeTask(
+        pool,
+        idSchema.parse(request.params.id),
+        bigIdSchema.parse(request.params.taskId)
+      );
+    }
+  );
+  app.post<{ Params: { id: string; taskId: string } }>(
+    "/api/campaigns/:id/tasks/:taskId/resolve",
+    (request) => {
+      const input = resolveTaskSchema.parse(request.body);
+      return resolveTask(
+        pool,
+        idSchema.parse(request.params.id),
+        bigIdSchema.parse(request.params.taskId),
+        input.decision,
+        input.requestKey
+      );
+    }
+  );
+  app.get<{ Params: { id: string } }>(
+    "/api/campaigns/:id/report.csv",
+    async (request, reply) => {
+      const report = await campaignReportCsv(
+        pool,
+        idSchema.parse(request.params.id)
+      );
+      return reply
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header(
+          "Content-Disposition",
+          `attachment; filename="mailcontrol-${report.campaign.id.slice(0, 8)}.csv"; filename*=UTF-8''${encodeURIComponent(report.filename)}`
+        )
+        .send(report.content);
+    }
+  );
 
-  app.get("/api/events", (request) => listEvents(pool, eventListSchema.parse(request.query)));
+  app.get("/api/events", (request) =>
+    listEvents(pool, eventListSchema.parse(request.query))
+  );
   app.get<{ Params: { id: string } }>("/api/attempts/:id", (request) =>
     getAttempt(pool, bigIdSchema.parse(request.params.id))
   );
@@ -361,10 +467,7 @@ export async function createApp(
     const metadata = await stat(config.archivePath);
     return reply
       .header("Content-Type", "application/zip")
-      .header(
-        "Content-Disposition",
-        'attachment; filename="MailControl.zip"'
-      )
+      .header("Content-Disposition", 'attachment; filename="MailControl.zip"')
       .header("Content-Length", metadata.size)
       .header("Cache-Control", "no-store")
       .send(createReadStream(config.archivePath));

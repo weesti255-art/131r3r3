@@ -30,7 +30,9 @@ export async function waitForDatabase(pool: pg.Pool, attempts = 20) {
       return;
     } catch (error) {
       if (index >= attempts) throw error;
-      console.error(`[mailcontrol] database not ready (${(error as { code?: string }).code ?? "error"}), retry ${index}/${attempts}`);
+      console.error(
+        `[mailcontrol] database not ready (${(error as { code?: string }).code ?? "error"}), retry ${index}/${attempts}`
+      );
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
   }

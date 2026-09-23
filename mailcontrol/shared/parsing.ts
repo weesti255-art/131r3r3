@@ -109,9 +109,7 @@ export function parseAccounts(
   let rows: ParsedLine[];
   if (format === "csv") {
     rows = parseCsv(text);
-    const header = rows[0]?.fields.map((value) =>
-      value.trim().toLowerCase()
-    );
+    const header = rows[0]?.fields.map((value) => value.trim().toLowerCase());
     if (
       !header ||
       header[0] !== "email" ||
@@ -148,7 +146,12 @@ export function parseAccounts(
     }
     const emailProblem = checkAccountEmail(rawEmail);
     if (emailProblem)
-      return { line: row.line, ok: false as const, email: safeEmail, reason: emailProblem };
+      return {
+        line: row.line,
+        ok: false as const,
+        email: safeEmail,
+        reason: emailProblem,
+      };
     const trimmed = password.trim();
     if (trimmed.length < 8 || trimmed.length > 200)
       return {

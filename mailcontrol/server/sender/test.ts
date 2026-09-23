@@ -80,7 +80,8 @@ export function classifyTestRecipient(email: string): SendOutcome {
   if (local.startsWith("unknown") || local.startsWith("lost"))
     return {
       kind: "unknown",
-      message: "Тестовый отправитель: ответ сервера потерян после передачи письма",
+      message:
+        "Тестовый отправитель: ответ сервера потерян после передачи письма",
     };
   return { kind: "accepted", response: "250 OK (тестовый отправитель)" };
 }

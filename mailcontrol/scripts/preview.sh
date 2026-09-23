@@ -10,6 +10,6 @@ unset DATABASE_URL
 if [ -f .local/preview-origin ]; then
   export MAILCONTROL_ALLOWED_ORIGINS="$(cat .local/preview-origin)"
 fi
-export MAILCONTROL_ARCHIVE_PATH="$PWD/.local/releases/MailControl-M1.zip"
+export MAILCONTROL_ARCHIVE_PATH="$PWD/.local/releases/MailControl.zip"
 npm run build
 exec node dist/server/main.js

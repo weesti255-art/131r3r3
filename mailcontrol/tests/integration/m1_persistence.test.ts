@@ -62,9 +62,9 @@ describe("M1 persistence and database modes", () => {
         sendingEnabled: boolean;
         accountCount: number;
         groupCount: number;
-        draftCount: number;
+        campaignCount: number;
         problemAccountCount: number;
-        acceptedToday: number;
+        acceptedSince: number;
         queuedTasks: number;
         recentCampaigns: unknown[];
         recentEvents: unknown[];
@@ -73,9 +73,9 @@ describe("M1 persistence and database modes", () => {
       assert.equal(overviewValue.sendingEnabled, false);
       assert.equal(overviewValue.accountCount, 12);
       assert.equal(overviewValue.groupCount, 3);
-      assert.equal(overviewValue.draftCount, 3);
+      assert.equal(overviewValue.campaignCount, 3);
       assert.equal(overviewValue.problemAccountCount, 2);
-      assert.equal(overviewValue.acceptedToday, 0);
+      assert.equal(overviewValue.acceptedSince, 0);
       assert.equal(overviewValue.queuedTasks, 0);
       assert.equal(overviewValue.recentCampaigns.length, 3);
       assert.equal(overviewValue.recentEvents.length, 4);
@@ -90,7 +90,7 @@ describe("M1 persistence and database modes", () => {
         mode: string;
         accountCount: number;
         groupCount: number;
-        draftCount: number;
+        campaignCount: number;
         problemAccountCount: number;
         recentCampaigns: unknown[];
         recentEvents: unknown[];
@@ -98,7 +98,7 @@ describe("M1 persistence and database modes", () => {
       assert.equal(overview.mode, "local");
       assert.equal(overview.accountCount, 0);
       assert.equal(overview.groupCount, 0);
-      assert.equal(overview.draftCount, 0);
+      assert.equal(overview.campaignCount, 0);
       assert.equal(overview.problemAccountCount, 0);
       assert.deepEqual(overview.recentCampaigns, []);
       assert.deepEqual(overview.recentEvents, []);

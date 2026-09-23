@@ -2786,7 +2786,7 @@ function GroupModal({
     <Modal
       open={open}
       title="Новая группа аккаунтов"
-      description="Значения лимита применятся к новым аккаунтам группы в M2."
+      description="Значения лимита — умолчания для новой пачки импортируемых аккаунтов; у каждого ящика лимит свой."
       closeDisabled={saving}
       onRequestClose={onRequestClose}
     >
@@ -3088,8 +3088,9 @@ function DraftWizard({
                 <div className="form-callout">
                   <Info size={16} aria-hidden="true" />
                   <span>
-                    Лимиты аккаунтов и выбор конкретного отправителя появятся
-                    вместе с импортом доступов в M2.
+                    Отправитель выбирается автоматически из доступных аккаунтов
+                    группы с учётом их лимитов; имя отправителя — только
+                    отображаемое.
                   </span>
                 </div>
               </div>
@@ -3439,7 +3440,7 @@ function ReviewRow({
       {missing ? (
         <AlertCircle size={15} aria-label="Поле обязательно" />
       ) : state === "unavailable" ? (
-        <Clock3 size={15} aria-label="Недоступно в M1" />
+        <Clock3 size={15} aria-label="Недоступно" />
       ) : (
         <CheckCircle2 size={15} aria-hidden="true" />
       )}

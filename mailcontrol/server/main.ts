@@ -31,7 +31,9 @@ async function main() {
 
 main().catch((error: unknown) => {
   const code =
-    error && typeof error === "object" && "code" in error ? String(error.code) : "configuration_or_migration";
+    error && typeof error === "object" && "code" in error
+      ? String(error.code)
+      : "configuration_or_migration";
   console.error(
     `[mailcontrol] startup failed (${code}): ${(error as Error).message}. Check PostgreSQL, APP_MODE and migration consistency.`
   );

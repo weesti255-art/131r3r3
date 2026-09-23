@@ -8,7 +8,11 @@ import type {
   RecipientsResult,
   Task,
 } from "../shared/contracts.js";
-import { isValidEmail, normalizeEmail, parseRecipients } from "../shared/parsing.js";
+import {
+  isValidEmail,
+  normalizeEmail,
+  parseRecipients,
+} from "../shared/parsing.js";
 import { clock } from "./clock.js";
 import { transaction } from "./database.js";
 import { ApiFailure } from "./errors.js";
@@ -18,10 +22,17 @@ import { getCampaign, getTask } from "./repository.js";
 
 const MAX_RECIPIENTS = 200000;
 
-export function previewRecipients(text: string, format: ImportFormat): RecipientsPreview {
+export function previewRecipients(
+  text: string,
+  format: ImportFormat
+): RecipientsPreview {
   const rows = parseRecipients(text, format);
   if (rows.length > MAX_RECIPIENTS)
-    throw new ApiFailure(400, "TOO_MANY_ROWS", `Не более ${MAX_RECIPIENTS} получателей в одной рассылке.`);
+    throw new ApiFailure(
+      400,
+      "TOO_MANY_ROWS",
+      `Не более ${MAX_RECIPIENTS} получателей в одной рассылке.`
+    );
   const seen = new Set<string>();
   const invalid: ImportErrorRow[] = [];
   let duplicateCount = 0;
@@ -48,21 +59,40 @@ export function previewRecipients(text: string, format: ImportFormat): Recipient
 }
 
 async function lockCampaign(client: PoolClient, id: string) {
-  const result = await client.query<{ status: string; name: string; group_id: string; subject: string; body: string; is_test: boolean }>(
+  const result = await client.query<{
+    status: string;
+    name: string;
+    group_id: string;
+    subject: string;
+    body: string;
+    is_test: boolean;
+  }>(
     "SELECT status, name, group_id, subject, body, is_test FROM campaigns WHERE id = $1 FOR UPDATE",
     [id]
   );
-  if (!result.rows[0]) throw new ApiFailure(404, "CAMPAIGN_NOT_FOUND", "Рассылка не найдена.");
+  if (!result.rows[0])
+    throw new ApiFailure(404, "CAMPAIGN_NOT_FOUND", "Рассылка не найдена.");
   return result.rows[0];
 }
 
 async function seenRequest<T>(client: PoolClient, key: string) {
-  const result = await client.query<{ result: T }>("SELECT result FROM import_requests WHERE request_key = $1", [key]);
+  const result = await client.query<{ result: T }>(
+    "SELECT result FROM import_requests WHERE request_key = $1",
+    [key]
+  );
   return result.rows[0]?.result;
 }
 
-async function rememberRequest(client: PoolClient, key: string, kind: string, result: unknown) {
-  await client.query("INSERT INTO import_requests(request_key, kind, result) VALUES ($1, $2, $3)", [key, kind, JSON.stringify(result)]);
+async function rememberRequest(
+  client: PoolClient,
+  key: string,
+  kind: string,
+  result: unknown
+) {
+  await client.query(
+    "INSERT INTO import_requests(request_key, kind, result) VALUES ($1, $2, $3)",
+    [key, kind, JSON.stringify(result)]
+  );
 }
 
 /** Replaces the recipient list of a draft. Duplicates inside one campaign collapse into one task. */
@@ -72,11 +102,19 @@ export function setRecipients(
   input: { text: string; format: ImportFormat; requestKey: string }
 ): Promise<RecipientsResult> {
   return transaction(pool, async (client) => {
-    const repeated = await seenRequest<Omit<RecipientsResult, "campaign">>(client, input.requestKey);
-    if (repeated) return { ...repeated, campaign: await getCampaign(client, campaignId) };
+    const repeated = await seenRequest<Omit<RecipientsResult, "campaign">>(
+      client,
+      input.requestKey
+    );
+    if (repeated)
+      return { ...repeated, campaign: await getCampaign(client, campaignId) };
     const campaign = await lockCampaign(client, campaignId);
     if (campaign.status !== "draft")
-      throw new ApiFailure(409, "INVALID_STATE", "Список получателей зафиксирован при запуске. Создайте новую рассылку.");
+      throw new ApiFailure(
+        409,
+        "INVALID_STATE",
+        "Список получателей зафиксирован при запуске. Создайте новую рассылку."
+      );
     const preview = previewRecipients(input.text, input.format);
     const emails: string[] = [];
     const seen = new Set<string>();
@@ -86,7 +124,10 @@ export function setRecipients(
         emails.push(row.email);
       }
     }
-    await client.query("DELETE FROM tasks WHERE campaign_id = $1 AND status = 'pending'", [campaignId]);
+    await client.query(
+      "DELETE FROM tasks WHERE campaign_id = $1 AND status = 'pending'",
+      [campaignId]
+    );
     for (let offset = 0; offset < emails.length; offset += 2000) {
       const chunk = emails.slice(offset, offset + 2000);
       await client.query(
@@ -95,7 +136,10 @@ export function setRecipients(
         [campaignId, offset, chunk]
       );
     }
-    await client.query("UPDATE campaigns SET updated_at = now() WHERE id = $1", [campaignId]);
+    await client.query(
+      "UPDATE campaigns SET updated_at = now() WHERE id = $1",
+      [campaignId]
+    );
     const result = {
       validCount: preview.validCount,
       duplicateCount: preview.duplicateCount,
@@ -113,12 +157,19 @@ export function setRecipients(
   });
 }
 
-export function startCampaign(pool: Pool, campaignId: string): Promise<Campaign> {
+export function startCampaign(
+  pool: Pool,
+  campaignId: string
+): Promise<Campaign> {
   return transaction(pool, async (client) => {
     const campaign = await lockCampaign(client, campaignId);
     if (campaign.status === "running") return getCampaign(client, campaignId);
     if (campaign.status !== "draft")
-      throw new ApiFailure(409, "INVALID_STATE", "Запустить можно только черновик. Для паузы используйте «Продолжить».");
+      throw new ApiFailure(
+        409,
+        "INVALID_STATE",
+        "Запустить можно только черновик. Для паузы используйте «Продолжить»."
+      );
     const recipients = await client.query<{ count: number }>(
       "SELECT count(*)::int AS count FROM tasks WHERE campaign_id = $1",
       [campaignId]
@@ -128,16 +179,25 @@ export function startCampaign(pool: Pool, campaignId: string): Promise<Campaign>
     if (!campaign.subject.trim()) problems.push("пустая тема");
     if (!campaign.body.trim()) problems.push("пустой текст");
     if (problems.length)
-      throw new ApiFailure(409, "NOT_READY", `Рассылку нельзя запустить: ${problems.join(", ")}.`);
+      throw new ApiFailure(
+        409,
+        "NOT_READY",
+        `Рассылку нельзя запустить: ${problems.join(", ")}.`
+      );
     const now = clock.now();
     await client.query(
       "UPDATE campaigns SET status = 'running', started_at = $2, revision = revision + 1, updated_at = now() WHERE id = $1",
       [campaignId, now]
     );
-    await client.query("UPDATE tasks SET next_attempt_at = $2, updated_at = now() WHERE campaign_id = $1", [campaignId, now]);
+    await client.query(
+      "UPDATE tasks SET next_attempt_at = $2, updated_at = now() WHERE campaign_id = $1",
+      [campaignId, now]
+    );
     await recordEvent(client, {
       kind: "campaign_started",
-      title: campaign.is_test ? "Запущена тестовая отправка" : "Рассылка запущена",
+      title: campaign.is_test
+        ? "Запущена тестовая отправка"
+        : "Рассылка запущена",
       detail: `«${campaign.name}»: ${recipients.rows[0].count} получателей. Тема, текст и список зафиксированы.`,
       campaignId,
     });
@@ -145,12 +205,19 @@ export function startCampaign(pool: Pool, campaignId: string): Promise<Campaign>
   });
 }
 
-export function pauseCampaign(pool: Pool, campaignId: string): Promise<Campaign> {
+export function pauseCampaign(
+  pool: Pool,
+  campaignId: string
+): Promise<Campaign> {
   return transaction(pool, async (client) => {
     const campaign = await lockCampaign(client, campaignId);
     if (campaign.status === "paused") return getCampaign(client, campaignId);
     if (campaign.status !== "running")
-      throw new ApiFailure(409, "INVALID_STATE", "На паузу можно поставить только выполняющуюся рассылку.");
+      throw new ApiFailure(
+        409,
+        "INVALID_STATE",
+        "На паузу можно поставить только выполняющуюся рассылку."
+      );
     await client.query(
       "UPDATE campaigns SET status = 'paused', pause_reason = 'Пауза по команде оператора', wait_reason = NULL, wait_until = NULL, updated_at = now() WHERE id = $1",
       [campaignId]
@@ -170,12 +237,19 @@ export function pauseCampaign(pool: Pool, campaignId: string): Promise<Campaign>
   });
 }
 
-export function resumeCampaign(pool: Pool, campaignId: string): Promise<Campaign> {
+export function resumeCampaign(
+  pool: Pool,
+  campaignId: string
+): Promise<Campaign> {
   return transaction(pool, async (client) => {
     const campaign = await lockCampaign(client, campaignId);
     if (campaign.status === "running") return getCampaign(client, campaignId);
     if (campaign.status !== "paused")
-      throw new ApiFailure(409, "INVALID_STATE", "«Продолжить» работает только для рассылки на паузе.");
+      throw new ApiFailure(
+        409,
+        "INVALID_STATE",
+        "«Продолжить» работает только для рассылки на паузе."
+      );
     await client.query(
       "UPDATE campaigns SET status = 'running', pause_reason = NULL, updated_at = now() WHERE id = $1",
       [campaignId]
@@ -186,17 +260,25 @@ export function resumeCampaign(pool: Pool, campaignId: string): Promise<Campaign
       detail: `«${campaign.name}».`,
       campaignId,
     });
-    if (await finishCampaignIfDone(client, campaignId, clock.now())) return getCampaign(client, campaignId);
+    if (await finishCampaignIfDone(client, campaignId, clock.now()))
+      return getCampaign(client, campaignId);
     return getCampaign(client, campaignId);
   });
 }
 
-export function stopCampaign(pool: Pool, campaignId: string): Promise<Campaign> {
+export function stopCampaign(
+  pool: Pool,
+  campaignId: string
+): Promise<Campaign> {
   return transaction(pool, async (client) => {
     const campaign = await lockCampaign(client, campaignId);
     if (campaign.status === "stopped") return getCampaign(client, campaignId);
     if (!["running", "paused"].includes(campaign.status))
-      throw new ApiFailure(409, "INVALID_STATE", "Остановить можно только выполняющуюся рассылку или рассылку на паузе.");
+      throw new ApiFailure(
+        409,
+        "INVALID_STATE",
+        "Остановить можно только выполняющуюся рассылку или рассылку на паузе."
+      );
     const now = clock.now();
     const cancelled = await client.query(
       `UPDATE tasks SET status = 'cancelled', finished_at = $2, owner_worker_id = NULL, owner_token = NULL, reserved_until = NULL, updated_at = now()
@@ -223,17 +305,27 @@ export function stopCampaign(pool: Pool, campaignId: string): Promise<Campaign> 
   });
 }
 
-export function excludeTask(pool: Pool, campaignId: string, taskId: string): Promise<Task> {
+export function excludeTask(
+  pool: Pool,
+  campaignId: string,
+  taskId: string
+): Promise<Task> {
   return transaction(pool, async (client) => {
     await lockCampaign(client, campaignId);
     const task = await client.query<{ status: string; email: string }>(
       "SELECT status, email FROM tasks WHERE id = $1 AND campaign_id = $2 FOR UPDATE",
       [taskId, campaignId]
     );
-    if (!task.rows[0]) throw new ApiFailure(404, "TASK_NOT_FOUND", "Задача не найдена.");
-    if (task.rows[0].status === "excluded") return getTask(client, campaignId, taskId);
+    if (!task.rows[0])
+      throw new ApiFailure(404, "TASK_NOT_FOUND", "Задача не найдена.");
+    if (task.rows[0].status === "excluded")
+      return getTask(client, campaignId, taskId);
     if (!["pending", "reserved"].includes(task.rows[0].status))
-      throw new ApiFailure(409, "INVALID_STATE", "Исключить можно только ещё не начатую отправку.");
+      throw new ApiFailure(
+        409,
+        "INVALID_STATE",
+        "Исключить можно только ещё не начатую отправку."
+      );
     await client.query(
       "UPDATE tasks SET status = 'excluded', finished_at = $2, owner_worker_id = NULL, owner_token = NULL, reserved_until = NULL, resolved_by_operator = true, updated_at = now() WHERE id = $1",
       [taskId, clock.now()]
@@ -265,14 +357,27 @@ export function resolveTask(
     const repeated = await seenRequest<{ taskId: string }>(client, requestKey);
     if (repeated) return getTask(client, campaignId, taskId);
     await lockCampaign(client, campaignId);
-    const task = await client.query<{ status: string; email: string; account_id: string }>(
+    const task = await client.query<{
+      status: string;
+      email: string;
+      account_id: string;
+    }>(
       "SELECT status, email, account_id FROM tasks WHERE id = $1 AND campaign_id = $2 FOR UPDATE",
       [taskId, campaignId]
     );
-    if (!task.rows[0]) throw new ApiFailure(404, "TASK_NOT_FOUND", "Задача не найдена.");
+    if (!task.rows[0])
+      throw new ApiFailure(404, "TASK_NOT_FOUND", "Задача не найдена.");
     if (task.rows[0].status !== "unclear")
-      throw new ApiFailure(409, "INVALID_STATE", "Решение принимается только по задаче с неясным исходом.");
-    const attempt = await client.query<{ id: string; quota_id: string | null; account_period: number }>(
+      throw new ApiFailure(
+        409,
+        "INVALID_STATE",
+        "Решение принимается только по задаче с неясным исходом."
+      );
+    const attempt = await client.query<{
+      id: string;
+      quota_id: string | null;
+      account_period: number;
+    }>(
       `SELECT p.id::text, q.id::text AS quota_id, a.period_hours AS account_period FROM attempts p
        LEFT JOIN quota_usage q ON q.attempt_id = p.id JOIN accounts a ON a.id = p.account_id
        WHERE p.task_id = $1 ORDER BY p.number DESC LIMIT 1 FOR UPDATE OF p`,
@@ -280,14 +385,24 @@ export function resolveTask(
     );
     const last = attempt.rows[0];
     const now = clock.now();
-    const status = decision === "accepted" ? "accepted" : decision === "failed" ? "failed" : "closed_unconfirmed";
+    const status =
+      decision === "accepted"
+        ? "accepted"
+        : decision === "failed"
+          ? "failed"
+          : "closed_unconfirmed";
     await client.query(
       "UPDATE attempts SET operator_decision = $2 WHERE id = $1",
       [last.id, decision]
     );
     if (last.quota_id) {
       // Closing without proof counts as a possible send from the moment of closing.
-      const state = decision === "accepted" ? "accepted" : decision === "failed" ? "released" : "possible";
+      const state =
+        decision === "accepted"
+          ? "accepted"
+          : decision === "failed"
+            ? "released"
+            : "possible";
       await client.query(
         `UPDATE quota_usage SET state = $2, occupied_at = CASE WHEN $2 = 'possible' THEN $3::timestamptz ELSE occupied_at END WHERE id = $1`,
         [last.quota_id, state, now]
@@ -333,19 +448,42 @@ export function createTestSend(
     if (repeated) return getCampaign(client, repeated.id);
     const email = normalizeEmail(recipient);
     if (!isValidEmail(email))
-      throw new ApiFailure(400, "VALIDATION_ERROR", "Укажите корректный адрес для тестового письма.");
+      throw new ApiFailure(
+        400,
+        "VALIDATION_ERROR",
+        "Укажите корректный адрес для тестового письма."
+      );
     const source = await lockCampaign(client, campaignId);
     if (!source.subject.trim() || !source.body.trim())
-      throw new ApiFailure(409, "NOT_READY", "Для тестовой отправки нужны тема и текст.");
-    const sender = await client.query<{ sender_name: string }>("SELECT sender_name FROM campaigns WHERE id = $1", [campaignId]);
+      throw new ApiFailure(
+        409,
+        "NOT_READY",
+        "Для тестовой отправки нужны тема и текст."
+      );
+    const sender = await client.query<{ sender_name: string }>(
+      "SELECT sender_name FROM campaigns WHERE id = $1",
+      [campaignId]
+    );
     const id = randomUUID();
     const now = clock.now();
     await client.query(
       `INSERT INTO campaigns(id, request_key, group_id, name, subject, body, sender_name, status, is_test, started_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'running', true, $8)`,
-      [id, requestKey, source.group_id, `Тест: ${source.name}`.slice(0, 120), source.subject, source.body, sender.rows[0].sender_name, now]
+      [
+        id,
+        requestKey,
+        source.group_id,
+        `Тест: ${source.name}`.slice(0, 120),
+        source.subject,
+        source.body,
+        sender.rows[0].sender_name,
+        now,
+      ]
     );
-    await client.query("INSERT INTO tasks(campaign_id, email, position, next_attempt_at) VALUES ($1, $2, 1, $3)", [id, email, now]);
+    await client.query(
+      "INSERT INTO tasks(campaign_id, email, position, next_attempt_at) VALUES ($1, $2, 1, $3)",
+      [id, email, now]
+    );
     await rememberRequest(client, requestKey, "test_send", { id });
     await recordEvent(client, {
       kind: "test_send",
@@ -376,11 +514,28 @@ function csvCell(value: string | number | null) {
 
 export async function campaignReportCsv(pool: Pool, campaignId: string) {
   const campaign = await getCampaign(pool, campaignId);
-  const header = ["№", "Получатель", "Статус", "Попыток", "Аккаунт", "Последняя ошибка", "Завершено (UTC)"];
+  const header = [
+    "№",
+    "Получатель",
+    "Статус",
+    "Попыток",
+    "Аккаунт",
+    "Последняя ошибка",
+    "Завершено (UTC)",
+  ];
   const lines = ["\uFEFF" + header.join(";")];
   let lastId = "0";
   for (;;) {
-    const rows = await pool.query<{ id: string; position: number; email: string; status: string; attempt_count: number; account: string | null; last_error: string | null; finished_at: string | null }>(
+    const rows = await pool.query<{
+      id: string;
+      position: number;
+      email: string;
+      status: string;
+      attempt_count: number;
+      account: string | null;
+      last_error: string | null;
+      finished_at: string | null;
+    }>(
       `SELECT t.id::text, t.position, t.email, t.status, t.attempt_count, a.email AS account, t.last_error, t.finished_at
        FROM tasks t LEFT JOIN accounts a ON a.id = t.account_id
        WHERE t.campaign_id = $1 AND t.id > $2 ORDER BY t.id LIMIT 5000`,
@@ -389,7 +544,15 @@ export async function campaignReportCsv(pool: Pool, campaignId: string) {
     if (!rows.rowCount) break;
     for (const row of rows.rows) {
       lines.push(
-        [row.position, row.email, TASK_LABELS[row.status] ?? row.status, row.attempt_count, row.account, row.last_error, row.finished_at]
+        [
+          row.position,
+          row.email,
+          TASK_LABELS[row.status] ?? row.status,
+          row.attempt_count,
+          row.account,
+          row.last_error,
+          row.finished_at,
+        ]
           .map(csvCell)
           .join(";")
       );

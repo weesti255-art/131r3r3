@@ -250,7 +250,7 @@ describe("M1 request boundary and failure handling", () => {
     });
   });
 
-  it("does not expose unimplemented import/send routes or accept password payloads", async () => {
+  it("rejects malformed import payloads without echoing passwords and has no raw send route", async () => {
     await withTestApp("local", async ({ app }) => {
       const secret = "password-that-must-not-appear";
       const importResponse = await jsonRequest(
@@ -262,7 +262,7 @@ describe("M1 request boundary and failure handling", () => {
           password: secret,
         }
       );
-      assert.equal(importResponse.statusCode, 404);
+      assert.equal(importResponse.statusCode, 400);
       assert.equal(importResponse.body.includes(secret), false);
 
       const sendResponse = await jsonRequest(app, "POST", "/api/send", {

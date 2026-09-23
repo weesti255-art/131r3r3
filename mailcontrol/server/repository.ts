@@ -104,7 +104,10 @@ async function page<T extends object>(
       `SELECT ${fields} ${from} ORDER BY ${order} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, input.pageSize, (input.page - 1) * input.pageSize]
     ),
-    pool.query<{ count: number }>(`SELECT count(*)::int AS count ${from}`, params),
+    pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count ${from}`,
+      params
+    ),
   ]);
   return {
     items: result.rows,
@@ -120,7 +123,11 @@ export async function selectGroup(client: Db, id: string): Promise<Group> {
     [id]
   );
   if (!result.rows[0])
-    throw new ApiFailure(404, "GROUP_NOT_FOUND", "Группа не найдена. Обновите список.");
+    throw new ApiFailure(
+      404,
+      "GROUP_NOT_FOUND",
+      "Группа не найдена. Обновите список."
+    );
   return result.rows[0];
 }
 
@@ -144,13 +151,18 @@ export async function getAccount(client: Db, id: string): Promise<Account> {
   return result.rows[0];
 }
 
-export async function getTask(client: Db, campaignId: string, taskId: string): Promise<Task> {
+export async function getTask(
+  client: Db,
+  campaignId: string,
+  taskId: string
+): Promise<Task> {
   const result = await client.query<Task>(
     `SELECT ${taskFields} FROM tasks t LEFT JOIN accounts a ON a.id = t.account_id
      WHERE t.campaign_id = $1 AND t.id = $2`,
     [campaignId, taskId]
   );
-  if (!result.rows[0]) throw new ApiFailure(404, "TASK_NOT_FOUND", "Задача не найдена.");
+  if (!result.rows[0])
+    throw new ApiFailure(404, "TASK_NOT_FOUND", "Задача не найдена.");
   return result.rows[0];
 }
 
@@ -159,7 +171,8 @@ export async function getAttempt(client: Db, id: string): Promise<Attempt> {
     `SELECT ${attemptFields} FROM attempts p JOIN accounts a ON a.id = p.account_id WHERE p.id = $1`,
     [id]
   );
-  if (!result.rows[0]) throw new ApiFailure(404, "ATTEMPT_NOT_FOUND", "Попытка не найдена.");
+  if (!result.rows[0])
+    throw new ApiFailure(404, "ATTEMPT_NOT_FOUND", "Попытка не найдена.");
   return result.rows[0];
 }
 
@@ -202,7 +215,9 @@ export function accountFilter(
   }
   const status = accountStatusSql.replaceAll("$NOW", nowParam);
   if (input.status === "problem") {
-    clauses.push(`${status} IN ('auth_error', 'needs_check', 'blocked', 'temporary_error')`);
+    clauses.push(
+      `${status} IN ('auth_error', 'needs_check', 'blocked', 'temporary_error')`
+    );
   } else if (input.status !== "all") {
     params.push(input.status);
     clauses.push(`${status} = $${params.length}`);
@@ -230,7 +245,8 @@ export function listCampaigns(pool: Db, input: ListInput) {
     params.push(input.groupId);
     clauses.push(`c.group_id = $${params.length}`);
   }
-  if (input.status === "active") clauses.push("c.status IN ('running', 'paused')");
+  if (input.status === "active")
+    clauses.push("c.status IN ('running', 'paused')");
   else if (input.status !== "all") {
     params.push(input.status);
     clauses.push(`c.status = $${params.length}`);
@@ -360,7 +376,8 @@ export function updateSettings(
       retry_base_minutes: input.retryBaseMinutes ?? before.retry_base_minutes,
       retry_max_minutes: input.retryMaxMinutes ?? before.retry_max_minutes,
       sender_kind: input.senderKind ?? before.sender_kind,
-      test_sender_delay_ms: input.testSenderDelayMs ?? before.test_sender_delay_ms,
+      test_sender_delay_ms:
+        input.testSenderDelayMs ?? before.test_sender_delay_ms,
     };
     if (next.retry_max_minutes < next.retry_base_minutes)
       throw new ApiFailure(
@@ -447,7 +464,9 @@ export async function getOverview(
       `SELECT ${campaignFields} FROM campaigns c JOIN account_groups g ON c.group_id = g.id
        ORDER BY c.updated_at DESC, c.id LIMIT 5`
     ),
-    pool.query<Event>(`SELECT ${eventFields} FROM events e ORDER BY e.created_at DESC, e.id DESC LIMIT 8`),
+    pool.query<Event>(
+      `SELECT ${eventFields} FROM events e ORDER BY e.created_at DESC, e.id DESC LIMIT 8`
+    ),
     listWorkers(pool),
   ]);
   return {
@@ -468,7 +487,14 @@ export function createGroup(pool: Pool, input: CreateGroup) {
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO account_groups(id, request_key, name, color, limit_count, period_hours)
        VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (request_key) DO NOTHING RETURNING id`,
-      [randomUUID(), input.requestKey, input.name, input.color, input.limitCount, input.periodHours]
+      [
+        randomUUID(),
+        input.requestKey,
+        input.name,
+        input.color,
+        input.limitCount,
+        input.periodHours,
+      ]
     );
     let id = inserted.rows[0]?.id;
     if (!id) {
@@ -519,7 +545,15 @@ export function createCampaign(pool: Pool, input: CreateDraft) {
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO campaigns(id, request_key, group_id, name, subject, body, sender_name)
        VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (request_key) DO NOTHING RETURNING id`,
-      [randomUUID(), input.requestKey, input.groupId, input.name, input.subject, input.body, input.senderName]
+      [
+        randomUUID(),
+        input.requestKey,
+        input.groupId,
+        input.name,
+        input.subject,
+        input.body,
+        input.senderName,
+      ]
     );
     let id = inserted.rows[0]?.id;
     if (!id) {
@@ -555,11 +589,16 @@ export function updateCampaign(pool: Pool, id: string, input: UpdateDraft) {
       "SELECT status FROM campaigns WHERE id = $1 FOR UPDATE",
       [id]
     );
-    if (!locked.rowCount) throw new ApiFailure(404, "CAMPAIGN_NOT_FOUND", "Рассылка не найдена.");
+    if (!locked.rowCount)
+      throw new ApiFailure(404, "CAMPAIGN_NOT_FOUND", "Рассылка не найдена.");
     const existing = await getCampaign(client, id);
     if (existing.revision !== input.revision) {
       // A retry after a lost response must not overwrite another edit.
-      if (existing.revision === input.revision + 1 && sameDraft(existing, input)) return existing;
+      if (
+        existing.revision === input.revision + 1 &&
+        sameDraft(existing, input)
+      )
+        return existing;
       throw new ApiFailure(
         409,
         "REVISION_CONFLICT",
@@ -576,7 +615,14 @@ export function updateCampaign(pool: Pool, id: string, input: UpdateDraft) {
     await client.query(
       `UPDATE campaigns SET group_id = $2, name = $3, subject = $4, body = $5, sender_name = $6,
                             revision = revision + 1, updated_at = now() WHERE id = $1`,
-      [id, input.groupId, input.name, input.subject, input.body, input.senderName]
+      [
+        id,
+        input.groupId,
+        input.name,
+        input.subject,
+        input.body,
+        input.senderName,
+      ]
     );
     await recordEvent(client, {
       kind: "draft_updated",

@@ -15,11 +15,7 @@ import type { KeyStore } from "./crypto.js";
 import { transaction } from "./database.js";
 import { ApiFailure } from "./errors.js";
 import { recordEvent } from "./events.js";
-import {
-  accountFilter,
-  getAccount,
-  selectGroup,
-} from "./repository.js";
+import { accountFilter, getAccount, selectGroup } from "./repository.js";
 import type { Sender } from "./sender/types.js";
 import type { BulkAccountInput } from "./validation.js";
 
@@ -28,7 +24,7 @@ const MAX_ROWS = 20000;
 
 export function accountTemplate(format: ImportFormat) {
   return format === "csv"
-    ? "email,app_password\r\nuser1@mail.ru,пароль-приложения-1\r\n\"user2@inbox.ru\",\"пароль-приложения-2\"\r\n"
+    ? 'email,app_password\r\nuser1@mail.ru,пароль-приложения-1\r\n"user2@inbox.ru","пароль-приложения-2"\r\n'
     : "user1@mail.ru | пароль-приложения-1\r\nuser2@inbox.ru | пароль-приложения-2\r\n";
 }
 
@@ -44,8 +40,14 @@ export async function previewAccountImport(
       "TOO_MANY_ROWS",
       `За один импорт принимается не более ${MAX_ROWS} строк. Разделите файл.`
     );
-  const emails = [...new Set(parsed.filter((row) => row.ok).map((row) => row.email))];
-  const existing = await pool.query<{ email: string; group_id: string; name: string }>(
+  const emails = [
+    ...new Set(parsed.filter((row) => row.ok).map((row) => row.email)),
+  ];
+  const existing = await pool.query<{
+    email: string;
+    group_id: string;
+    name: string;
+  }>(
     `SELECT a.email, a.group_id, g.name FROM accounts a JOIN account_groups g ON g.id = a.group_id
      WHERE a.email = ANY($1::text[])`,
     [emails]
@@ -60,24 +62,58 @@ export async function previewAccountImport(
     let preview: ImportPreviewRow;
     if (!row.ok) {
       errorCount++;
-      preview = { line: row.line, email: row.email, kind: "error", reason: row.reason, existingGroupName: null, existingGroupId: null };
+      preview = {
+        line: row.line,
+        email: row.email,
+        kind: "error",
+        reason: row.reason,
+        existingGroupName: null,
+        existingGroupId: null,
+      };
     } else if (seen.has(row.email)) {
       errorCount++;
-      preview = { line: row.line, email: row.email, kind: "error", reason: "Адрес повторяется в этом же импорте", existingGroupName: null, existingGroupId: null };
+      preview = {
+        line: row.line,
+        email: row.email,
+        kind: "error",
+        reason: "Адрес повторяется в этом же импорте",
+        existingGroupName: null,
+        existingGroupId: null,
+      };
     } else {
       seen.add(row.email);
       const current = known.get(row.email);
       if (current) {
         duplicateCount++;
-        preview = { line: row.line, email: row.email, kind: "duplicate", reason: null, existingGroupName: current.name, existingGroupId: current.group_id };
+        preview = {
+          line: row.line,
+          email: row.email,
+          kind: "duplicate",
+          reason: null,
+          existingGroupName: current.name,
+          existingGroupId: current.group_id,
+        };
       } else {
         newCount++;
-        preview = { line: row.line, email: row.email, kind: "new", reason: null, existingGroupName: null, existingGroupId: null };
+        preview = {
+          line: row.line,
+          email: row.email,
+          kind: "new",
+          reason: null,
+          existingGroupName: null,
+          existingGroupId: null,
+        };
       }
     }
     if (rows.length < PREVIEW_ROWS) rows.push(preview);
   }
-  return { rows, newCount, duplicateCount, errorCount, truncated: parsed.length > PREVIEW_ROWS };
+  return {
+    rows,
+    newCount,
+    duplicateCount,
+    errorCount,
+    truncated: parsed.length > PREVIEW_ROWS,
+  };
 }
 
 export interface AccountImportInput {
@@ -104,7 +140,11 @@ export function importAccounts(
     const group = await selectGroup(client, input.groupId);
     const parsed = parseAccounts(input.text, input.format);
     if (parsed.length > MAX_ROWS)
-      throw new ApiFailure(400, "TOO_MANY_ROWS", `За один импорт принимается не более ${MAX_ROWS} строк.`);
+      throw new ApiFailure(
+        400,
+        "TOO_MANY_ROWS",
+        `За один импорт принимается не более ${MAX_ROWS} строк.`
+      );
     const errors: ImportErrorRow[] = [];
     const seen = new Set<string>();
     let added = 0;
@@ -117,7 +157,11 @@ export function importAccounts(
         continue;
       }
       if (seen.has(row.email)) {
-        errors.push({ line: row.line, email: row.email, reason: "Адрес повторяется в этом же импорте" });
+        errors.push({
+          line: row.line,
+          email: row.email,
+          reason: "Адрес повторяется в этом же импорте",
+        });
         continue;
       }
       seen.add(row.email);
@@ -130,7 +174,12 @@ export function importAccounts(
         if (input.duplicateAction === "move") {
           await client.query(
             `UPDATE accounts SET group_id = $2, limit_count = $3, period_hours = $4, updated_at = now() WHERE id = $1`,
-            [existing.rows[0].id, input.groupId, input.limitCount, input.periodHours]
+            [
+              existing.rows[0].id,
+              input.groupId,
+              input.limitCount,
+              input.periodHours,
+            ]
           );
           movedIds.push(existing.rows[0].id);
           duplicatesMoved++;
@@ -142,7 +191,14 @@ export function importAccounts(
         `INSERT INTO accounts(id, email, group_id, limit_count, period_hours, is_demo,
                               password_ciphertext, password_key_id, connection_status)
          VALUES (gen_random_uuid(), $1, $2, $3, $4, false, $5, $6, 'unverified')`,
-        [row.email, input.groupId, input.limitCount, input.periodHours, encrypted.ciphertext, encrypted.keyId]
+        [
+          row.email,
+          input.groupId,
+          input.limitCount,
+          input.periodHours,
+          encrypted.ciphertext,
+          encrypted.keyId,
+        ]
       );
       added++;
     }
@@ -191,7 +247,11 @@ async function selectTargets(
   }
   const params: unknown[] = [clock.now()];
   const where = accountFilter(
-    { q: input.filter?.q ?? "", groupId: input.filter?.groupId, status: input.filter?.status ?? "all" },
+    {
+      q: input.filter?.q ?? "",
+      groupId: input.filter?.groupId,
+      status: input.filter?.status ?? "all",
+    },
     params,
     "$1"
   );
@@ -216,7 +276,10 @@ export async function bulkAccounts(
     );
     if (repeated.rows[0]) return repeated.rows[0].result;
     const ids = (await selectTargets(pool, input, false)).map((row) => row.id);
-    const result: BulkAccountResult = { affected: ids.length, checked: await checker(ids) };
+    const result: BulkAccountResult = {
+      affected: ids.length,
+      checked: await checker(ids),
+    };
     await pool.query(
       "INSERT INTO import_requests(request_key, kind, result) VALUES ($1, 'bulk', $2) ON CONFLICT DO NOTHING",
       [input.requestKey, JSON.stringify(result)]
@@ -304,13 +367,18 @@ interface CredentialRow {
   is_demo: boolean;
 }
 
-export async function loadCredentials(client: Pool | PoolClient, keys: KeyStore, accountId: string) {
+export async function loadCredentials(
+  client: Pool | PoolClient,
+  keys: KeyStore,
+  accountId: string
+) {
   const result = await client.query<CredentialRow>(
     "SELECT id, email, password_ciphertext, password_key_id, is_demo FROM accounts WHERE id = $1",
     [accountId]
   );
   const row = result.rows[0];
-  if (!row) throw new ApiFailure(404, "ACCOUNT_NOT_FOUND", "Аккаунт не найден.");
+  if (!row)
+    throw new ApiFailure(404, "ACCOUNT_NOT_FOUND", "Аккаунт не найден.");
   if (!row.password_ciphertext || !row.password_key_id)
     return { email: row.email, password: "", demo: true };
   return {
@@ -362,13 +430,22 @@ export async function checkAccount(
         `UPDATE accounts SET connection_status = $2, connection_error = $3, connection_checked_at = $4,
                              cooldown_until = CASE WHEN $2 = 'temporary_error' THEN $4::timestamptz + make_interval(mins => $5) ELSE NULL END,
                              updated_at = now() WHERE id = $1`,
-        [accountId, status, outcome.message.slice(0, 500), clock.now(), cooldownMinutes]
+        [
+          accountId,
+          status,
+          outcome.message.slice(0, 500),
+          clock.now(),
+          cooldownMinutes,
+        ]
       );
     }
     await recordEvent(client, {
       kind: "account_checked",
       level: outcome.kind === "ok" ? "info" : "warning",
-      title: outcome.kind === "ok" ? "Проверка подключения пройдена" : "Проверка подключения не пройдена",
+      title:
+        outcome.kind === "ok"
+          ? "Проверка подключения пройдена"
+          : "Проверка подключения не пройдена",
       detail: `${credentials.email}: ${outcome.kind === "ok" ? outcome.response : outcome.message} (${sender.kind === "mail" ? "Mail SMTP" : "тестовый отправитель, не Mail"})`,
       accountId,
     });
@@ -390,7 +467,12 @@ export async function checkMany(
   for (const id of ids.slice(0, 200)) {
     try {
       const result = await checkAccount(pool, keys, sender, id);
-      if (["active", "unverified", "quota_exhausted"].includes(result.account.status)) ok++;
+      if (
+        ["active", "unverified", "quota_exhausted"].includes(
+          result.account.status
+        )
+      )
+        ok++;
       else problems++;
     } catch {
       problems++;

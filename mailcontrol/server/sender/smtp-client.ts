@@ -191,7 +191,11 @@ async function login(
 ) {
   connection.stage = "greeting";
   expect(await connection.read(), "greeting", [220]);
-  const ehlo = expect(await connection.command(`EHLO ${hostname}`, "ehlo"), "ehlo", [250]);
+  const ehlo = expect(
+    await connection.command(`EHLO ${hostname}`, "ehlo"),
+    "ehlo",
+    [250]
+  );
   const methods =
     ehlo.text
       .split("\n")
@@ -200,22 +204,35 @@ async function login(
       .split(/\s+/)
       .slice(1) ?? [];
   if (methods.includes("PLAIN")) {
-    const token = Buffer.from(`\0${user}\0${password}`, "utf8").toString("base64");
-    expect(await connection.command(`AUTH PLAIN ${token}`, "auth"), "auth", [235]);
+    const token = Buffer.from(`\0${user}\0${password}`, "utf8").toString(
+      "base64"
+    );
+    expect(await connection.command(`AUTH PLAIN ${token}`, "auth"), "auth", [
+      235,
+    ]);
   } else if (methods.includes("LOGIN") || methods.length === 0) {
     expect(await connection.command("AUTH LOGIN", "auth"), "auth", [334]);
     expect(
-      await connection.command(Buffer.from(user, "utf8").toString("base64"), "auth"),
+      await connection.command(
+        Buffer.from(user, "utf8").toString("base64"),
+        "auth"
+      ),
       "auth",
       [334]
     );
     expect(
-      await connection.command(Buffer.from(password, "utf8").toString("base64"), "auth"),
+      await connection.command(
+        Buffer.from(password, "utf8").toString("base64"),
+        "auth"
+      ),
       "auth",
       [235]
     );
   } else {
-    throw new SmtpError("auth", `Unsupported AUTH methods: ${methods.join(" ")}`);
+    throw new SmtpError(
+      "auth",
+      `Unsupported AUTH methods: ${methods.join(" ")}`
+    );
   }
 }
 
@@ -250,7 +267,11 @@ export async function smtpSend(
       "mail",
       [250]
     );
-    expect(await connection.command(`RCPT TO:<${message.to}>`, "rcpt"), "rcpt", [250, 251]);
+    expect(
+      await connection.command(`RCPT TO:<${message.to}>`, "rcpt"),
+      "rcpt",
+      [250, 251]
+    );
     expect(await connection.command("DATA", "data"), "data", [354]);
     const mime = buildMime(message, message.from.email.split("@")[1]);
     await connection.write(mime.replace(/\r\n\./g, "\r\n..") + "\r\n");

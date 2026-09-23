@@ -66,7 +66,11 @@ export async function seedDemo(client: PoolClient) {
         `b1000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
         `demo.sender${String(index + 1).padStart(2, "0")}@${domains[index % domains.length]}`,
         group.id,
-        status === "active" ? "ok" : status === "disabled" ? "unverified" : status,
+        status === "active"
+          ? "ok"
+          : status === "disabled"
+            ? "unverified"
+            : status,
         status === "disabled",
         status === "auth_error"
           ? "Демонстрация: неверный пароль приложения"

@@ -4,8 +4,11 @@ import { strict as assert } from "node:assert";
 import type { FastifyInstance } from "fastify";
 import type { PoolConfig } from "pg";
 import type { AppMode } from "../../shared/contracts.js";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createApp } from "../../server/app.js";
 import { loadConfig, type Config } from "../../server/config.js";
+import { createKeyStore, type KeyStore } from "../../server/crypto.js";
 import { createPool, initializeDatabase } from "../../server/database.js";
 
 const generatedDatabaseNames = new Set<string>();
@@ -93,6 +96,14 @@ export interface OpenedTestApp {
   mode: AppMode;
   pool: ReturnType<typeof createPool>;
   app: FastifyInstance;
+  keys: KeyStore;
+  config: Config;
+}
+
+export async function testKeyStore() {
+  return createKeyStore(
+    await mkdtemp(path.join(tmpdir(), "mailcontrol-keys-"))
+  );
 }
 
 export async function openExistingTestApp(
@@ -108,8 +119,9 @@ export async function openExistingTestApp(
   const pool = createPool(config.database);
   try {
     await initializeDatabase(pool, path.resolve("db"), mode);
-    const app = await createApp(config, pool, false);
-    return { database, mode, pool, app };
+    const keys = await testKeyStore();
+    const app = await createApp(config, pool, keys, false);
+    return { database, mode, pool, app, keys, config };
   } catch (error) {
     await pool.end();
     throw error;
@@ -157,7 +169,7 @@ export function requestHeaders(overrides: Record<string, string> = {}) {
 
 export async function jsonRequest(
   app: FastifyInstance,
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "PUT",
   url: string,
   payload?: unknown,
   headers: Record<string, string> = {}

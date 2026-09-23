@@ -6,7 +6,14 @@ import type { Config } from "./config.js";
 import type { KeyStore } from "./crypto.js";
 import { loadCredentials } from "./accounts.js";
 import { recordEvent } from "./events.js";
-import { beginAttempt, finishAttempt, readyCampaigns, recoverStale, reserveNext, type StartedAttempt } from "./queue.js";
+import {
+  beginAttempt,
+  finishAttempt,
+  readyCampaigns,
+  recoverStale,
+  reserveNext,
+  type StartedAttempt,
+} from "./queue.js";
 import { loadSettingsRow } from "./repository.js";
 import { createMailSender } from "./sender/mail.js";
 import { createTestSender } from "./sender/test.js";
@@ -25,7 +32,10 @@ export interface WorkerOptions {
 
 const RETRYABLE = new Set(["40P01", "40001"]);
 
-async function withRetry<T>(action: () => Promise<T>, attempts = 3): Promise<T> {
+async function withRetry<T>(
+  action: () => Promise<T>,
+  attempts = 3
+): Promise<T> {
   for (let index = 1; ; index++) {
     try {
       return await action();
@@ -60,7 +70,9 @@ export class Worker {
     this.pool = options.pool;
     this.keys = options.keys;
     this.config = options.config;
-    this.log = options.log ?? ((message) => console.log(`[worker ${this.id.slice(0, 8)}] ${message}`));
+    this.log =
+      options.log ??
+      ((message) => console.log(`[worker ${this.id.slice(0, 8)}] ${message}`));
     this.concurrency = options.concurrency ?? options.config.workerConcurrency;
     this.senderOverride = options.sender;
   }
@@ -71,7 +83,13 @@ export class Worker {
       `INSERT INTO workers(id, hostname, pid, sender_kind, started_at, last_heartbeat_at)
        VALUES ($1, $2, $3, $4, $5, $5)
        ON CONFLICT (id) DO UPDATE SET last_heartbeat_at = EXCLUDED.last_heartbeat_at, stopped_at = NULL`,
-      [this.id, hostname(), process.pid, this.senderOverride?.kind ?? settings.sender_kind, clock.now()]
+      [
+        this.id,
+        hostname(),
+        process.pid,
+        this.senderOverride?.kind ?? settings.sender_kind,
+        clock.now(),
+      ]
     );
     await recordEvent(this.pool, {
       kind: "worker_started",
@@ -81,7 +99,10 @@ export class Worker {
   }
 
   async heartbeat() {
-    await this.pool.query("UPDATE workers SET last_heartbeat_at = $2 WHERE id = $1", [this.id, clock.now()]);
+    await this.pool.query(
+      "UPDATE workers SET last_heartbeat_at = $2 WHERE id = $1",
+      [this.id, clock.now()]
+    );
   }
 
   private async aliveWorkerIds() {
@@ -104,14 +125,20 @@ export class Worker {
     if (this.senderOverride) return this.senderOverride;
     const settings = await loadSettingsRow(this.pool);
     this.delayMs = settings.test_sender_delay_ms;
-    const kind = this.config.mode === "demo" || this.config.preview ? "test" : settings.sender_kind;
+    const kind =
+      this.config.mode === "demo" || this.config.preview
+        ? "test"
+        : settings.sender_kind;
     if (this.sender && this.senderKind === kind) return this.sender;
     this.senderKind = kind;
     this.sender =
       kind === "mail"
         ? createMailSender(this.config.smtpOverride)
         : createTestSender({ delayMs: () => this.delayMs });
-    await this.pool.query("UPDATE workers SET sender_kind = $2 WHERE id = $1", [this.id, kind]);
+    await this.pool.query("UPDATE workers SET sender_kind = $2 WHERE id = $1", [
+      this.id,
+      kind,
+    ]);
     return this.sender;
   }
 
@@ -123,15 +150,24 @@ export class Worker {
     const campaigns = await readyCampaigns(this.pool);
     for (const campaignId of campaigns) {
       if (started >= free) break;
-      const reservation = await withRetry(() => reserveNext(this.pool, campaignId, this.id));
+      const reservation = await withRetry(() =>
+        reserveNext(this.pool, campaignId, this.id)
+      );
       if (!reservation) continue;
-      const begun = await withRetry(() => beginAttempt(this.pool, reservation, this.id));
+      const begun = await withRetry(() =>
+        beginAttempt(this.pool, reservation, this.id)
+      );
       if (begun.kind !== "started") {
-        if (begun.kind === "waiting") this.log(`campaign ${campaignId.slice(0, 8)} waiting: ${begun.reason}`);
+        if (begun.kind === "waiting")
+          this.log(
+            `campaign ${campaignId.slice(0, 8)} waiting: ${begun.reason}`
+          );
         continue;
       }
       started++;
-      const job = this.deliver(begun.attempt).finally(() => this.inFlight.delete(job));
+      const job = this.deliver(begun.attempt).finally(() =>
+        this.inFlight.delete(job)
+      );
       this.inFlight.add(job);
     }
     return started;
@@ -141,7 +177,11 @@ export class Worker {
     const sender = await this.currentSender();
     let outcome;
     try {
-      const credentials = await loadCredentials(this.pool, this.keys, attempt.accountId);
+      const credentials = await loadCredentials(
+        this.pool,
+        this.keys,
+        attempt.accountId
+      );
       if (credentials.demo && sender.kind === "mail") {
         outcome = {
           kind: "rejected" as const,
@@ -163,14 +203,23 @@ export class Worker {
         kind: "rejected" as const,
         category: "connection" as const,
         code: null,
-        message: `Внутренняя ошибка отправителя: ${(error as Error).message}`.slice(0, 500),
+        message:
+          `Внутренняя ошибка отправителя: ${(error as Error).message}`.slice(
+            0,
+            500
+          ),
       };
     }
     try {
-      const result = await withRetry(() => finishAttempt(this.pool, { attempt, outcome }), 5);
+      const result = await withRetry(
+        () => finishAttempt(this.pool, { attempt, outcome }),
+        5
+      );
       this.log(`task ${attempt.taskId} → ${result}`);
     } catch (error) {
-      this.log(`failed to record outcome for task ${attempt.taskId}: ${(error as Error).message}`);
+      this.log(
+        `failed to record outcome for task ${attempt.taskId}: ${(error as Error).message}`
+      );
     }
   }
 
@@ -180,9 +229,13 @@ export class Worker {
 
   async run(signal?: AbortSignal) {
     await this.register();
-    await this.recover().catch((error) => this.log(`recovery failed: ${(error as Error).message}`));
+    await this.recover().catch((error) =>
+      this.log(`recovery failed: ${(error as Error).message}`)
+    );
     this.heartbeatTimer = setInterval(() => {
-      void this.heartbeat().catch(() => this.log("heartbeat failed: database unavailable"));
+      void this.heartbeat().catch(() =>
+        this.log("heartbeat failed: database unavailable")
+      );
     }, 15000);
     let lastRecovery = Date.now();
     signal?.addEventListener("abort", () => {
@@ -211,7 +264,10 @@ export class Worker {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     await this.drain();
     await this.pool
-      .query("UPDATE workers SET stopped_at = $2 WHERE id = $1", [this.id, clock.now()])
+      .query("UPDATE workers SET stopped_at = $2 WHERE id = $1", [
+        this.id,
+        clock.now(),
+      ])
       .catch(() => undefined);
   }
 }
