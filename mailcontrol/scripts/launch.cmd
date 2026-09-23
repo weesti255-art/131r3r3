@@ -26,13 +26,10 @@ if not exist ".env" (
 echo Starting MailControl in %APP_MODE% mode. The first build requires internet access.
 echo Only one mode uses port 3000 at a time; the %OTHER_MODE% mode is stopped if it runs.
 docker stop mailcontrol-%OTHER_MODE%-worker-1 mailcontrol-%OTHER_MODE%-app-1 mailcontrol-%OTHER_MODE%-db-1 >nul 2>&1
-echo [1/3] Database...
-docker compose up -d --wait --wait-timeout 180 db
+echo [1/2] Database (its access for the application is synchronised automatically)...
+docker compose up -d --build --wait --wait-timeout 180 db
 if errorlevel 1 goto :failed
-echo [2/3] Database access for the application...
-docker compose exec -T db bash /mailcontrol/sync-app-role.sh
-if errorlevel 1 goto :failed
-echo [3/3] Application and sending process (build may take a few minutes)...
+echo [2/2] Application and sending process (the first build may take a few minutes)...
 docker compose up -d --build --wait --wait-timeout 300 app worker
 if errorlevel 1 goto :failed
 echo.
@@ -48,7 +45,6 @@ echo.
 echo Startup failed. Your saved data has not been deleted. Recent logs:
 docker compose logs --tail=40 --no-color db app worker
 echo.
-echo If the error mentions "password authentication failed", run this file again:
-echo the database access is re-synchronised on every start.
+echo The warning "volume ... was created for project mailcontrol" is harmless: the old data volume is reused.
 pause
 exit /b 1

@@ -15,9 +15,7 @@ echo This REPLACES all MailControl data in %APP_MODE% mode with the backup.
 set /p CONFIRM=Type YES to continue: 
 if not "%CONFIRM%"=="YES" ( echo Cancelled. & pause & exit /b 1 )
 docker compose stop app worker
-docker compose up -d --wait --wait-timeout 180 db
-if errorlevel 1 goto :failed
-docker compose exec -T db bash /mailcontrol/sync-app-role.sh
+docker compose up -d --build --wait --wait-timeout 180 db
 if errorlevel 1 goto :failed
 docker compose exec -T db psql -v ON_ERROR_STOP=1 -q -U mailcontrol -d mailcontrol -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 if errorlevel 1 goto :failed

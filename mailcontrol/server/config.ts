@@ -2,7 +2,7 @@ import path from "node:path";
 import type { PoolConfig } from "pg";
 import type { AppMode } from "../shared/contracts.js";
 
-export const APP_VERSION = "1.0.0";
+export const APP_VERSION = "1.0.1";
 
 export interface SmtpOverride {
   host: string;

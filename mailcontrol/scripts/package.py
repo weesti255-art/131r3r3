@@ -40,7 +40,7 @@ for directory, extensions in directories.items():
             continue
         if path.name.startswith(".env") or path.suffix in (".log", ".zip"):
             raise RuntimeError("An unexpected private or generated file entered the release list")
-        if path.suffix not in extensions:
+        if path.suffix not in extensions and path.name != "Dockerfile":
             raise RuntimeError(f"Unexpected release file: {path.relative_to(app)}")
         members[f"mailcontrol/{path.relative_to(app).as_posix()}"] = path.read_bytes()
 for name in ("AGENTS.md", "PROGRESS.md"):
@@ -58,7 +58,7 @@ for name in members:
     if name.endswith(".cmd"):
         members[name] = members[name].replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 manifest = {
-    "product": "MailControl", "version": "1.0.0", "stage": "MVP-1",
+    "product": "MailControl", "version": "1.0.1", "stage": "MVP-1",
     "createdAt": datetime.now(timezone.utc).isoformat(),
     "files": {name: sha256(data).hexdigest() for name, data in sorted(members.items())},
 }

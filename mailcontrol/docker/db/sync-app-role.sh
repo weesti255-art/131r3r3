@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Runs inside the db container on every start (see scripts/launch.cmd and
-# scripts/compose-up.sh). The application role must match POSTGRES_PASSWORD
-# from .env even when the data volume was created with an older .env or by an
-# older release whose bootstrap role was "mailcontrol" itself.
+# Runs inside the db container on every start (entrypoint.sh) and from
+# RESTORE.cmd. The application role must match POSTGRES_PASSWORD from .env
+# even when the data volume was created with an older .env or by an older
+# release whose bootstrap role was "mailcontrol" itself.
 set -euo pipefail
 if psql -U mailcontrol_admin -d postgres -Atqc 'SELECT 1' >/dev/null 2>&1; then
   admin=mailcontrol_admin
