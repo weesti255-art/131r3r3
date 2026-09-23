@@ -50,7 +50,7 @@ for filename in (
     "overview-1440.png", "accounts-1280.png", "campaigns-1280.png",
     "events-1280.png", "wizard-1280.png",
 ):
-    image = repo / ".hoplite/artifacts/mailcontrol-m1" / filename
+    image = repo / "evidence" / filename
     if image.is_file():
         members[f"evidence/{filename}"] = image.read_bytes()
 for filename in ("START-DEMO.cmd", "START-EMPTY.cmd", "STOP.cmd"):
@@ -62,7 +62,7 @@ for name in members:
     if name.endswith(".cmd"):
         members[name] = members[name].replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 manifest = {
-    "product": "MailControl", "version": "0.1.0", "stage": "M1",
+    "product": "MailControl", "version": "0.1.1", "stage": "M1",
     "createdAt": datetime.now(timezone.utc).isoformat(),
     "files": {name: sha256(data).hexdigest() for name, data in sorted(members.items())},
 }

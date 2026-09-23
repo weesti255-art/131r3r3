@@ -170,7 +170,7 @@ export async function createApp(config: Config, pool: Pool, serveWeb = true) {
       database: "connected",
       mode: config.mode,
       stage: "M1",
-      version: "0.1.0",
+      version: "0.1.1",
       sendingEnabled: false,
       archiveAvailable: await fileExists(config.archivePath),
     };

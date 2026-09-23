@@ -19,7 +19,7 @@ export interface Health {
   database: "connected";
   mode: AppMode;
   stage: "M1";
-  version: "0.1.0";
+  version: "0.1.1";
   sendingEnabled: false;
   archiveAvailable: boolean;
 }

@@ -5,16 +5,20 @@ services:
     image: postgres:16-bookworm
     environment:
       POSTGRES_DB: mailcontrol
-      POSTGRES_USER: mailcontrol
+      # Bootstrap superuser stays administrative; the app connects as "mailcontrol".
+      POSTGRES_USER: mailcontrol_admin
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Use START-DEMO.cmd or create the local .env file first}
     volumes:
       - database:/var/lib/postgresql/data
-      - ./docker/20-role.sql:/docker-entrypoint-initdb.d/20-role.sql:ro
+      - ./docker/20-app-role.sql:/docker-entrypoint-initdb.d/20-app-role.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mailcontrol -d mailcontrol"]
+      # TCP only: the temporary init-time server listens on the Unix socket alone.
+      test:
+        ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U mailcontrol -d mailcontrol"]
       interval: 5s
       timeout: 3s
       retries: 15
+      start_period: 20s
     restart: unless-stopped
     networks: [database]
 
