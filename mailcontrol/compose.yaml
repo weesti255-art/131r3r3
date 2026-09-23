@@ -1,0 +1,54 @@
+name: mailcontrol
+
+services:
+  db:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: mailcontrol
+      POSTGRES_USER: mailcontrol
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Use START-DEMO.cmd or create the local .env file first}
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./docker/20-role.sql:/docker-entrypoint-initdb.d/20-role.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailcontrol -d mailcontrol"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+    networks: [database]
+
+  app:
+    build: .
+    environment:
+      APP_MODE: ${APP_MODE:-local}
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: mailcontrol
+      PGUSER: mailcontrol
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Use START-DEMO.cmd or create the local .env file first}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1));"
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 15s
+    restart: unless-stopped
+    networks: [database]
+
+volumes:
+  database:
+    name: mailcontrol-${APP_MODE:-local}-data
+
+networks:
+  database:
+    internal: true
