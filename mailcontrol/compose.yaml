@@ -1,4 +1,6 @@
-name: mailcontrol
+# Each mode is a separate Compose project with its own containers and volumes.
+# START-*.cmd set APP_MODE; for manual commands run `set APP_MODE=demo` first.
+name: mailcontrol-${APP_MODE:-local}
 
 services:
   db:
@@ -24,15 +26,19 @@ services:
 
   app:
     build: .
-    environment:
+    image: mailcontrol-app
+    environment: &app-environment
       APP_MODE: ${APP_MODE:-local}
       PGHOST: db
       PGPORT: 5432
       PGDATABASE: mailcontrol
       PGUSER: mailcontrol
       PGPASSWORD: ${POSTGRES_PASSWORD:?Use START-DEMO.cmd or create the local .env file first}
+      MAILCONTROL_DATA_DIR: /var/lib/mailcontrol
     ports:
       - "127.0.0.1:3000:3000"
+    volumes:
+      - secrets:/var/lib/mailcontrol
     depends_on:
       db:
         condition: service_healthy
@@ -49,9 +55,25 @@ services:
     restart: unless-stopped
     networks: [database]
 
+  worker:
+    image: mailcontrol-app
+    command: ["node", "dist/server/worker.js"]
+    environment: *app-environment
+    volumes:
+      - secrets:/var/lib/mailcontrol
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [database]
+
 volumes:
   database:
     name: mailcontrol-${APP_MODE:-local}-data
+  secrets:
+    name: mailcontrol-${APP_MODE:-local}-secrets
 
 networks:
   database:
